@@ -184,6 +184,15 @@ class _AudioManager {
     setTimeout(() => this._tone({ freq: 680 + p * 520, type: 'sine', dur: 0.12, decay: 0.12, vol: 0.1 + p * 0.12, freqEnd: 200 }), 16);
   }
 
+  // Wall bounce — soft tick for light shots, a deep loud thud for hard ones.
+  playWallHit(power = 0.5) {
+    if (!this.settings.sfx) return;
+    const p = Math.max(0, Math.min(1, power));
+    this._tone({ freq: 130 + (1 - p) * 150, type: 'square', dur: 0.1, decay: 0.09, vol: 0.05 + p * 0.16, freqEnd: 60 });
+    if (p > 0.55) setTimeout(() => this._tone({ freq: 95, type: 'sine', dur: 0.13, decay: 0.12, vol: 0.12, freqEnd: 48 }), 10);
+    if (p > 0.5 && this.settings.vibe && navigator.vibrate) navigator.vibrate(Math.round(p * 28));
+  }
+
   // ---------------- MUSIC (very gentle ambient pad) ----------------
   startMusic() {
     if (!this.settings.music) return;

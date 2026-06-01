@@ -122,6 +122,7 @@ export class GameScene {
     this.pull = { x: 0, y: 0 };  // slingshot pull vector (ball offset from anchor)
     this._pullLen = 0;
     this._tension = 0;           // 0..1 → shot power
+    this._wallFlash = null;      // transient wall-impact glow
     this._aiming = false;
     this._idle = 0;     // seconds since last shot / interaction (auto-fire timer)
     this._recoil = 0;   // launch kick, decays to 0
@@ -320,12 +321,31 @@ export class GameScene {
     const left = this.marginX + this.eggR, right = PLAY_AREA.width - this.marginX - this.eggR;
     for (let i = 0; i < steps; i++) {
       p.x += p.vx * h; p.y += p.vy * h;
-      if (p.x < left) { p.x = left; p.vx = Math.abs(p.vx); }
-      else if (p.x > right) { p.x = right; p.vx = -Math.abs(p.vx); }
+      if (p.x < left) {
+        p.x = left;
+        // strong shots bounce lively (≈elastic); weak shots lose horizontal energy
+        p.vx = Math.abs(p.vx) * (0.78 + (p.power || 0) * 0.22);
+        this._wallImpact(left, p.y, p.power || 0);
+      } else if (p.x > right) {
+        p.x = right;
+        p.vx = -Math.abs(p.vx) * (0.78 + (p.power || 0) * 0.22);
+        this._wallImpact(right, p.y, p.power || 0);
+      }
       if (p.y <= this.originY) { this._settle(p, null); return; }
       const hit = this._collideEgg(p.x, p.y);
       if (hit) { this._settle(p, hit); return; }
     }
+  }
+
+  // Wall-bounce feedback — scales hard with shot power so a max-pull shot slams
+  // the wall (big burst, flash, shake, deep thud) while a soft shot barely ticks.
+  _wallImpact(x, y, power) {
+    const p = Math.max(0, Math.min(1, power));
+    this._wallFlash = { x, y, t: 1, power: p };
+    this.particles.burst(x, y, ['#ffffff', this.theme.accent2 || '#fff'], 2 + Math.round(p * 9));
+    this.particles.flash(x, y, 16 + p * 44, `rgba(255,255,255,${0.25 + p * 0.5})`);
+    this.shake.trigger(1.5 + p * 8, 0.1 + p * 0.12);
+    AudioManager.playWallHit(p);
   }
 
   _collideEgg(x, y) {
@@ -790,6 +810,7 @@ export class GameScene {
       }
     }
     if (this._recoil > 0) this._recoil = Math.max(0, this._recoil - dt * 60);
+    if (this._wallFlash) { this._wallFlash.t -= dt * 3; if (this._wallFlash.t <= 0) this._wallFlash = null; }
     this.particles.update(dt);
     this.popups.update(dt);
     this.shake.update(dt);
@@ -805,6 +826,7 @@ export class GameScene {
     ctx.translate(sx, sy);
 
     this._drawDeathLine(ctx);
+    this._drawWallFlash(ctx);
     for (const v of this.grid.values()) {
       const w = this._cellToWorld(v.r, v.c);
       this._drawEgg(ctx, w.x, w.y, v.color, v.seed);
@@ -865,6 +887,27 @@ export class GameScene {
     ctx.moveTo(this.marginX, y);
     ctx.lineTo(PLAY_AREA.width - this.marginX, y);
     ctx.stroke();
+    ctx.restore();
+  }
+
+  _powerColor(t) {
+    if (t < 0.4) return '#6be37a';   // gentle
+    if (t < 0.75) return '#ffd23f';  // medium
+    return '#ff4d5e';                // hard
+  }
+
+  _drawWallFlash(ctx) {
+    const f = this._wallFlash;
+    if (!f || f.t <= 0) return;
+    const wx = f.x < PLAY_AREA.width / 2 ? this.marginX : PLAY_AREA.width - this.marginX;
+    const h = 40 + f.power * 90;
+    ctx.save();
+    ctx.globalAlpha = f.t * (0.4 + f.power * 0.5);
+    const g = ctx.createRadialGradient(wx, f.y, 2, wx, f.y, h / 2);
+    g.addColorStop(0, this._powerColor(f.power));
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(wx - 34, f.y - h / 2, 68, h);
     ctx.restore();
   }
 
@@ -1006,6 +1049,23 @@ export class GameScene {
       ctx.moveTo(Rx, tipY); ctx.lineTo(bx + this.eggR * 0.5, by);
       ctx.stroke();
       ctx.restore();
+
+      // power / tension gauge floating above the pulled ball
+      if (this._aiming && this._pullLen >= this.minPull) {
+        const tw = 60, th = 9, gx = bx - tw / 2, gy = by - this.eggR - 24;
+        ctx.save();
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        this._roundRect(ctx, gx - 3, gy - 3, tw + 6, th + 6, 6); ctx.fill();
+        ctx.fillStyle = this._powerColor(t);
+        this._roundRect(ctx, gx, gy, Math.max(3, tw * t), th, 5); ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 1;
+        for (let k = 1; k < 4; k++) { const xx = gx + tw * k / 4; ctx.beginPath(); ctx.moveTo(xx, gy); ctx.lineTo(xx, gy + th); ctx.stroke(); }
+        ctx.fillStyle = '#fff';
+        ctx.font = "800 13px 'Fredoka', system-ui, sans-serif";
+        ctx.textAlign = 'center';
+        ctx.fillText('⚡ ' + Math.round(t * 100) + '%', bx, gy - 6);
+        ctx.restore();
+      }
     }
   }
 

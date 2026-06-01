@@ -16,7 +16,7 @@ Installable as a PWA (Add to Home Screen) and playable offline after first load.
 
 **Core gameplay**
 - Classic **bubble shooter** on a hex/offset grid, rendered on Canvas 2D
-- **Slingshot aiming** — pull the elastic band back (touch + drag) to set angle *and* power; pull harder for a faster, harder-hitting shot. Dashed trajectory bounces off the walls (hot-coloured at high power) with a landing ghost; stretch/release sound effects
+- **Slingshot aiming** — pull the elastic band back (touch + drag) to set angle *and* power; pull harder for a faster, harder-hitting shot. Dashed trajectory bounces off the walls (hot-coloured at high power) with a landing ghost; stretch/release sound effects. A live **power gauge** (⚡ %) floats above the pouch, and **hard shots slam the walls** — bigger burst/flash/shake + deep thud and a livelier bounce, while soft shots dampen and tick quietly
 - **Match 3+** same-colour eggs → they pop (bigger clusters score more, with a juicy pitch ladder)
 - **Floating-cluster drop** — eggs no longer connected to the ceiling fall for bonus points
 - **Row feed** — a new row descends every few shots; clear the whole board for a big bonus and a fresh wave
