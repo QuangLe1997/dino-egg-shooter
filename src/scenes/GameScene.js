@@ -17,6 +17,8 @@ import { AssetManager } from '../managers/AssetManager.js';
 import { ProgressManager } from '../managers/ProgressManager.js';
 
 const AUTO_FIRE_SEC = 5; // auto-shoot if the player idles this long (tightens per level)
+const SIM_STEP = 5;      // px per collision step — shared by the real shot AND its aim
+                         // predictor so the dotted line lands exactly where the egg does
 
 export class GameScene {
   constructor() {
@@ -334,21 +336,18 @@ export class GameScene {
   // ---------- projectile / settle ----------
   _updateProjectile(dt) {
     const p = this.projectile;
-    const steps = Math.max(1, Math.ceil((SHOT_MAX * dt) / (this.eggR * 0.5)));
-    const h = dt / steps;
+    const rest = 0.78 + (p.power || 0) * 0.22; // strong = lively bounce, weak = loses energy
     const left = this.marginX + this.eggR, right = PLAY_AREA.width - this.marginX - this.eggR;
-    for (let i = 0; i < steps; i++) {
-      p.x += p.vx * h; p.y += p.vy * h;
-      if (p.x < left) {
-        p.x = left;
-        // strong shots bounce lively (≈elastic); weak shots lose horizontal energy
-        p.vx = Math.abs(p.vx) * (0.78 + (p.power || 0) * 0.22);
-        this._wallImpact(left, p.y, p.power || 0);
-      } else if (p.x > right) {
-        p.x = right;
-        p.vx = -Math.abs(p.vx) * (0.78 + (p.power || 0) * 0.22);
-        this._wallImpact(right, p.y, p.power || 0);
-      }
+    // Advance in fixed SIM_STEP increments — IDENTICAL to _simulateAim — so the egg
+    // settles exactly where the dotted line predicts (no early sticking / tunnelling).
+    let dist = Math.hypot(p.vx, p.vy) * dt; // distance to cover this frame
+    while (dist > 0) {
+      const sp = Math.hypot(p.vx, p.vy) || 1;
+      const s = Math.min(SIM_STEP, dist);
+      p.x += (p.vx / sp) * s; p.y += (p.vy / sp) * s;
+      dist -= s;
+      if (p.x < left) { p.x = left; p.vx = Math.abs(p.vx) * rest; this._wallImpact(left, p.y, p.power || 0); }
+      else if (p.x > right) { p.x = right; p.vx = -Math.abs(p.vx) * rest; this._wallImpact(right, p.y, p.power || 0); }
       if (p.y <= this.originY) { this._settle(p, null); return; }
       const hit = this._collideEgg(p.x, p.y);
       if (hit) { this._settle(p, hit); return; }
@@ -953,11 +952,11 @@ export class GameScene {
     const a = this.anchor;
     let x = a.x, y = a.y, vx = dir.x, vy = dir.y;
     const left = this.marginX + this.eggR, right = PLAY_AREA.width - this.marginX - this.eggR;
-    const step = 8;
+    const step = SIM_STEP; // MUST match _updateProjectile so the line == the real shot
     const rest = 0.78 + t * 0.22; // MUST match the wall restitution in _updateProjectile
     const pts = [];
     let landing = null, lastHit = null;
-    for (let i = 0; i < 280; i++) {
+    for (let i = 0; i < 460; i++) {
       const inv = step / Math.hypot(vx, vy); // advance a fixed length along the (tilted) heading
       x += vx * inv; y += vy * inv;
       if (x < left) { x = left; vx = Math.abs(vx) * rest; }        // lose horizontal energy on bounce
@@ -976,10 +975,10 @@ export class GameScene {
     const t = this._tension;
     const { pts, landing, lastHit } = this._simulateAim(dir, t);
     const cr = 255, cg = Math.round(255 - t * 150), cb = Math.round(255 - t * 210); // white → hot
-    const drawN = aiming ? pts.length : Math.min(pts.length, 22); // short hint when resting
+    const drawN = aiming ? pts.length : Math.min(pts.length, 36); // short hint when resting
     ctx.save();
     ctx.fillStyle = `rgb(${cr},${cg},${cb})`;
-    for (let i = 0; i < drawN; i += 3) {
+    for (let i = 0; i < drawN; i += 4) {
       ctx.globalAlpha = (aiming ? 0.85 : 0.3) * (1 - i / pts.length);
       ctx.beginPath();
       ctx.arc(pts[i].x, pts[i].y, aiming ? 3.2 + t * 1.6 : 2.4, 0, Math.PI * 2);
