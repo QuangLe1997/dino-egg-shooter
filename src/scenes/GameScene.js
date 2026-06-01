@@ -946,33 +946,44 @@ export class GameScene {
     ctx.restore();
   }
 
-  _drawAim(ctx) {
-    const aiming = this._pullLen >= this.minPull;
-    const dir = aiming ? this._launchDir() : { x: 0, y: -1 };
+  // Trace the shot path exactly like _updateProjectile: same walls, same
+  // restitution-on-bounce (so the dotted line matches where the egg really goes),
+  // and the same _collideEgg test. Returns the dot points + landing + hit cell.
+  _simulateAim(dir, t) {
     const a = this.anchor;
-    let x = a.x, y = a.y;
-    let vx = dir.x, vy = dir.y;
+    let x = a.x, y = a.y, vx = dir.x, vy = dir.y;
     const left = this.marginX + this.eggR, right = PLAY_AREA.width - this.marginX - this.eggR;
-    const step = 12;
-    const maxDots = aiming ? 150 : 36; // faint short hint when resting
-    const t = this._tension;
-    const cr = 255, cg = Math.round(255 - t * 150), cb = Math.round(255 - t * 210); // white → hot
+    const step = 8;
+    const rest = 0.78 + t * 0.22; // MUST match the wall restitution in _updateProjectile
+    const pts = [];
     let landing = null, lastHit = null;
-    ctx.save();
-    for (let i = 0; i < maxDots; i++) {
-      x += vx * step; y += vy * step;
-      if (x < left) { x = left; vx = Math.abs(vx); }
-      else if (x > right) { x = right; vx = -Math.abs(vx); }
+    for (let i = 0; i < 280; i++) {
+      const inv = step / Math.hypot(vx, vy); // advance a fixed length along the (tilted) heading
+      x += vx * inv; y += vy * inv;
+      if (x < left) { x = left; vx = Math.abs(vx) * rest; }        // lose horizontal energy on bounce
+      else if (x > right) { x = right; vx = -Math.abs(vx) * rest; }
       if (y <= this.originY) { landing = { x, y }; break; }
       const hit = this._collideEgg(x, y);
       if (hit) { landing = { x, y }; lastHit = hit; break; }
-      if (i % 2 === 0) {
-        ctx.globalAlpha = (aiming ? 0.85 : 0.3) * (1 - i / maxDots);
-        ctx.fillStyle = `rgb(${cr},${cg},${cb})`;
-        ctx.beginPath();
-        ctx.arc(x, y, aiming ? 3.2 + t * 1.6 : 2.4, 0, Math.PI * 2);
-        ctx.fill();
-      }
+      pts.push({ x, y });
+    }
+    return { pts, landing, lastHit };
+  }
+
+  _drawAim(ctx) {
+    const aiming = this._pullLen >= this.minPull;
+    const dir = aiming ? this._launchDir() : { x: 0, y: -1 };
+    const t = this._tension;
+    const { pts, landing, lastHit } = this._simulateAim(dir, t);
+    const cr = 255, cg = Math.round(255 - t * 150), cb = Math.round(255 - t * 210); // white → hot
+    const drawN = aiming ? pts.length : Math.min(pts.length, 22); // short hint when resting
+    ctx.save();
+    ctx.fillStyle = `rgb(${cr},${cg},${cb})`;
+    for (let i = 0; i < drawN; i += 3) {
+      ctx.globalAlpha = (aiming ? 0.85 : 0.3) * (1 - i / pts.length);
+      ctx.beginPath();
+      ctx.arc(pts[i].x, pts[i].y, aiming ? 3.2 + t * 1.6 : 2.4, 0, Math.PI * 2);
+      ctx.fill();
     }
     ctx.restore();
     if (landing && aiming) {
