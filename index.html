@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#1a1033" />
+  <meta name="description" content="Dino Egg Pop — a juicy bubble shooter. Aim, shoot and match 3 dino eggs to pop the nest!" />
+  <title>Dino Egg Pop — Bubble Shooter</title>
+
+  <!-- Display font for titles / score / banners -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&display=swap" rel="stylesheet" />
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Dino Egg Pop" />
+  <link rel="apple-touch-icon" href="assets/icons/apple-touch-180.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="assets/icons/icon-192.png" />
+
+  <!-- Social / Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Dino Egg Pop — Bubble Shooter" />
+  <meta property="og:description" content="Aim, shoot and match 3 dino eggs to pop the nest. A juicy bubble shooter!" />
+  <meta property="og:image" content="https://quangle1997.github.io/dino-egg-shooter/assets/og-card.jpg" />
+  <meta property="og:url" content="https://quangle1997.github.io/dino-egg-shooter/" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Dino Egg Pop — Bubble Shooter" />
+  <meta name="twitter:description" content="Aim, shoot and match 3 dino eggs to pop the nest!" />
+  <meta name="twitter:image" content="https://quangle1997.github.io/dino-egg-shooter/assets/og-card.jpg" />
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+   <div class="stage">
+    <canvas id="game"></canvas>
+
+    <!-- SPLASH -->
+    <div id="splash" class="overlay">
+      <div class="splash-inner">
+        <div class="splash-logo">🥚</div>
+        <div class="splash-title">DINO EGG POP</div>
+        <div class="splash-bar"><div class="splash-bar-fill" id="splashFill"></div></div>
+        <div class="splash-hint">Loading…</div>
+      </div>
+    </div>
+
+    <!-- MENU -->
+    <div id="menu" class="overlay hidden">
+      <!-- slim top bar: stats + quick icons (keeps the banner art clear) -->
+      <div class="menu-topbar">
+        <div class="menu-chip menu-hs">🏆 <span id="menuHighScore">0</span></div>
+        <div class="menu-tools">
+          <div class="menu-chip menu-coin"><img class="coin-ic" src="assets/images/coin.png" alt="coins" /><span id="menuCoins">0</span></div>
+          <button id="btnStats" class="icon-btn" aria-label="Stats">🏅</button>
+          <button id="btnDaily" class="icon-btn" aria-label="Daily reward">🎁<span class="icon-dot hidden" id="dailyDot"></span></button>
+          <button id="btnSettings" class="icon-btn" aria-label="Settings">⚙</button>
+          <button id="btnShare" class="icon-btn" aria-label="Share">📤</button>
+        </div>
+      </div>
+
+      <!-- hero title -->
+      <div class="menu-hero">
+        <div class="menu-egg">🥚</div>
+        <div class="menu-name">DINO EGG POP</div>
+        <div class="menu-tag">Aim · Match 3 · Pop the nest</div>
+      </div>
+
+      <!-- bottom dock: daily challenge + difficulty + single big CTA -->
+      <div class="menu-dock">
+        <button id="dailyChallengeChip" class="daily-chal">
+          <span class="dc-goal">🎯 <span id="dcLabel">Daily Challenge</span></span>
+          <span class="dc-meta" id="dcMeta"></span>
+        </button>
+        <div class="menu-modes" id="menuModes">
+          <button class="mode-btn" data-mode="easy">Easy</button>
+          <button class="mode-btn active" data-mode="normal">Normal</button>
+          <button class="mode-btn" data-mode="hard">Hard</button>
+        </div>
+        <button id="btnPlay" class="big-btn pulse">▶ PLAY</button>
+      </div>
+    </div>
+
+    <!-- HUD (in-game) -->
+    <div id="hud" class="hidden">
+      <div class="hud-top">
+        <div class="hud-left">
+          <div class="hud-eyebrow">SCORE</div>
+          <div class="hud-score-num" id="hudScore">0</div>
+          <div class="hud-levelline">
+            <span class="hud-lv">Lv&nbsp;<b id="hudLevel">1</b></span>
+            <span class="hud-levelbar"><span id="hudLevelFill"></span></span>
+            <span class="hud-best">Best&nbsp;<b id="hudBest">0</b></span>
+          </div>
+        </div>
+
+        <div class="hud-right">
+          <div class="hud-coins" id="hudWallet">
+            <img class="hud-coin-ic" src="assets/images/coin.png" alt="coins" /><span id="hudWalletCount">0</span>
+          </div>
+          <div class="hud-next">
+            <span class="hud-eyebrow">NEXT</span>
+            <span id="hudNext" class="hud-next-circle"></span>
+          </div>
+          <button id="btnPause" class="hud-pause" aria-label="Pause">❚❚</button>
+        </div>
+      </div>
+
+      <div class="hud-boosters">
+        <button class="booster-btn" data-booster="hammer" title="Rainbow egg — matches any colour">
+          🌈<span class="booster-count" id="boostHammer">3</span>
+        </button>
+        <button class="booster-btn" data-booster="bomb" title="Bomb egg — explodes on impact">
+          💣<span class="booster-count" id="boostBomb">1</span>
+        </button>
+        <button class="booster-btn" data-booster="freeze" title="Push back — clear the lowest row">
+          ⬆️<span class="booster-count" id="boostFreeze">2</span>
+        </button>
+      </div>
+
+      <div id="levelBanner" class="level-banner hidden">LEVEL 2 · Sunset</div>
+      <div id="comboBanner" class="combo-banner hidden">COMBO ×2!</div>
+    </div>
+
+    <!-- PAUSE -->
+    <div id="pause" class="overlay hidden">
+      <div class="dialog">
+        <div class="dialog-title">PAUSED</div>
+        <button id="btnResume" class="big-btn">Resume</button>
+        <button id="btnRestart" class="medium-btn">Restart</button>
+        <button id="btnToMenu" class="medium-btn">Main Menu</button>
+        <div class="dialog-row">
+          <label><input type="checkbox" id="optMusic" checked /> Music</label>
+          <label><input type="checkbox" id="optSfx" checked /> SFX</label>
+          <label><input type="checkbox" id="optVibe" checked /> Vibe</label>
+        </div>
+      </div>
+    </div>
+
+    <!-- GAME OVER -->
+    <div id="gameover" class="overlay hidden">
+      <div class="dialog go-dialog">
+        <div class="dialog-title" id="goTitle">GAME OVER</div>
+        <div class="go-label">YOUR SCORE</div>
+        <div class="go-value" id="goScore">0</div>
+        <div class="go-stats">
+          <div class="go-stat">
+            <div class="go-stat-v" id="goBest">0</div>
+            <div class="go-stat-l">BEST</div>
+          </div>
+          <div class="go-stat">
+            <div class="go-stat-v" id="goLevel">1</div>
+            <div class="go-stat-l">LEVEL</div>
+          </div>
+          <div class="go-stat">
+            <div class="go-stat-v go-stat-coin">+<span id="goCoins">0</span></div>
+            <div class="go-stat-l"><img class="coin-ic-sm" src="assets/images/coin.png" alt="" /> COINS</div>
+          </div>
+        </div>
+        <button id="btnRevive" class="big-btn revive">📺 REVIVE · Watch Ad</button>
+        <button id="btnPlayAgain" class="big-btn">↻ PLAY AGAIN</button>
+        <div class="go-row">
+          <button id="btnShareScore" class="small-btn">📤 Share</button>
+          <button id="btnGoMenu" class="small-btn">⌂ Menu</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- DAILY REWARD -->
+    <div id="daily" class="overlay hidden">
+      <div class="dialog">
+        <div class="dialog-title">DAILY REWARD</div>
+        <div class="daily-grid" id="dailyGrid"></div>
+        <div class="daily-msg" id="dailyMsg"></div>
+        <button id="btnDailyClaim" class="big-btn">CLAIM</button>
+        <button id="btnDailyClose" class="medium-btn">Close</button>
+      </div>
+    </div>
+
+    <!-- STATS: leaderboard + achievements -->
+    <div id="stats" class="overlay hidden">
+      <div class="dialog">
+        <div class="dialog-title">STATS</div>
+        <div class="stats-sec-title">🏆 Best Scores</div>
+        <div class="lb-list" id="lbList"></div>
+        <div class="stats-sec-title">🏅 Achievements <span id="achCount" class="ach-count"></span></div>
+        <div class="ach-grid" id="achGrid"></div>
+        <button id="btnStatsClose" class="medium-btn">Close</button>
+      </div>
+    </div>
+
+    <!-- ONBOARDING (first run) -->
+    <div id="onboard" class="overlay hidden">
+      <div class="dialog">
+        <div class="dialog-title">HOW TO PLAY</div>
+        <ul class="how-list">
+          <li><span>👆</span> Drag to aim, release to shoot an egg</li>
+          <li><span>🥚</span> Match 3+ same-colour eggs → they pop</li>
+          <li><span>🪺</span> Cut eggs off the ceiling → they drop for bonus</li>
+          <li><span>🌈</span> Boosters: Rainbow · 💣 Bomb · ⬆️ Push back</li>
+        </ul>
+        <button id="btnOnboard" class="big-btn">LET'S PLAY</button>
+      </div>
+    </div>
+
+    <!-- AD OVERLAY (mock) -->
+    <div id="adOverlay" class="overlay hidden">
+      <div class="ad-box">
+        <div class="ad-tag">AD</div>
+        <div class="ad-title" id="adTitle">Watch a short ad…</div>
+        <div class="ad-progress"><div id="adProgress"></div></div>
+        <button id="adSkip" class="medium-btn hidden">Skip</button>
+      </div>
+    </div>
+
+    <!-- TOAST -->
+    <div id="toast" class="toast"></div>
+   </div>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+/tmp/
+
+# Test artifacts (only root-level PNGs are throwaway screenshots —
+# keep game sprites under assets/)
+.playwright-mcp/
+/*.png
+
+# Specs (kept locally for reference but not for repo readers)
+# leave specs/ in the repo, they're useful context
+
+# Build output (none — pure static)
+node_modules/
+dist/
+build/

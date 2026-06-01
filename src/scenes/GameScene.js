@@ -1,0 +1,949 @@
+// GameScene — Dino Egg Pop (bubble shooter).
+// Aim with drag, release to fire an egg up into a hex grid. 3+ same-colour eggs
+// touching → they pop. Eggs no longer connected to the ceiling drop for bonus.
+// A new row descends every few shots; lose if an egg crosses the danger line.
+
+import { PLAY_AREA, DIFFICULTY } from '../config/constants.js';
+import { EGG_COLORS, GRID, SHOT_SPEED } from '../config/eggs.js';
+import { levelForScore, themeForLevel, nextThreshold } from '../config/themes.js';
+import { ParticleSystem } from '../effects/Particles.js';
+import { PopupSystem } from '../effects/Popups.js';
+import { ScreenShake } from '../effects/ScreenShake.js';
+import { CoinFly } from '../effects/CoinFly.js';
+import { AudioManager } from '../managers/AudioManager.js';
+import { SaveManager } from '../managers/SaveManager.js';
+import { EconomyManager } from '../managers/EconomyManager.js';
+import { AssetManager } from '../managers/AssetManager.js';
+import { ProgressManager } from '../managers/ProgressManager.js';
+
+export class GameScene {
+  constructor() {
+    this.canvas = document.getElementById('game');
+    this.hudEl = document.getElementById('hud');
+    this.pauseEl = document.getElementById('pause');
+    this.scoreEl = document.getElementById('hudScore');
+    this.levelEl = document.getElementById('hudLevel');
+    this.levelFillEl = document.getElementById('hudLevelFill');
+    this.bestEl = document.getElementById('hudBest');
+    this.walletEl = document.getElementById('hudWallet');
+    this.walletCountEl = document.getElementById('hudWalletCount');
+    this.nextEl = document.getElementById('hudNext');
+    this.levelBanner = document.getElementById('levelBanner');
+    this.comboBanner = document.getElementById('comboBanner');
+    this.hammerEl = document.getElementById('boostHammer');
+    this.bombEl = document.getElementById('boostBomb');
+    this.freezeEl = document.getElementById('boostFreeze');
+    this.optMusic = document.getElementById('optMusic');
+    this.optSfx = document.getElementById('optSfx');
+    this.optVibe = document.getElementById('optVibe');
+
+    this.particles = new ParticleSystem();
+    this.popups = new PopupSystem();
+    this.shake = new ScreenShake();
+    this.coinFly = new CoinFly();
+    this._spotCache = new Map();
+
+    // pause / settings
+    document.getElementById('btnPause').addEventListener('click', () => {
+      AudioManager.playClick();
+      this.paused ? this.resume() : this.pause();
+    });
+    document.getElementById('btnResume').addEventListener('click', () => { AudioManager.playClick(); this.resume(); });
+    document.getElementById('btnRestart').addEventListener('click', () => { AudioManager.playClick(); this.resume(); this._restart(); });
+    document.getElementById('btnToMenu').addEventListener('click', () => { AudioManager.playClick(); this.resume(); this._mgr.switchTo('menu'); });
+    [this.optMusic, this.optSfx, this.optVibe].forEach((el) => el && el.addEventListener('change', () => this._applySettings()));
+
+    // boosters
+    this.boosterBtns = [...document.querySelectorAll('.booster-btn')];
+    this.boosterBtns.forEach((btn) => btn.addEventListener('click', () => this._useBooster(btn.dataset.booster)));
+
+    this.cannon = { x: PLAY_AREA.width / 2, y: 628 };
+    this._setupInput();
+  }
+
+  // ---------- lifecycle ----------
+  enter() {
+    this.hudEl.classList.remove('hidden');
+    this._loadSettingsIntoUI();
+    this._initNewGame();
+    AudioManager.resume();
+    AudioManager.startMusic();
+  }
+
+  exit() {
+    this.hudEl.classList.add('hidden');
+    this.pauseEl.classList.add('hidden');
+    AudioManager.stopMusic();
+  }
+
+  _loadSettingsIntoUI() {
+    const s = SaveManager.getSettings();
+    this.optMusic.checked = !!s.music;
+    this.optSfx.checked = !!s.sfx;
+    this.optVibe.checked = !!s.vibe;
+  }
+
+  _applySettings() {
+    AudioManager.setSettings({ music: this.optMusic.checked, sfx: this.optSfx.checked, vibe: this.optVibe.checked });
+  }
+
+  _initNewGame() {
+    this.mode = SaveManager.getMode();
+    this.diff = DIFFICULTY[this.mode] || DIFFICULTY.normal;
+
+    // geometry
+    this.cellD = GRID.cellD;
+    this.eggR = GRID.R;
+    this.rowH = GRID.rowH;
+    this.marginX = GRID.marginX;
+    this.originX = this.marginX + this.cellD / 2;
+    this.originY = GRID.topY + this.eggR;
+    this.colsEven = GRID.cols;
+    this.colorsInPlay = this.diff.colors;
+    this.deathY = this.diff.dangerY;
+
+    // level + theme
+    this.level = 1;
+    this.theme = themeForLevel(1);
+    this.bgImg = AssetManager.get(this.theme.bg);
+    this.bgPrev = null;
+    this.bgFade = 1;
+
+    // state
+    this.score = 0;
+    this.combo = 0;
+    this.gameOver = false;
+    this.paused = false;
+    this.projectile = null;
+    this.aim = { x: this.cannon.x, y: this.cannon.y - 200 };
+    this._aiming = false;
+    this.activeBooster = null;
+    this.curBomb = false;
+    this.curRainbow = false;
+    this.revivesUsed = 0;
+    this._dangerNear = false;
+
+    // grid + queue
+    this.grid = new Map();
+    this._fillWave(this.diff.startRows);
+    this.current = this._newEgg();
+    this.next = this._newEgg();
+    this.shotsLeft = this._rowEvery();
+
+    // coins / wallet
+    this.runCoins = 0;
+    this.walletCount = EconomyManager.coins;
+    this.coinFly.clear();
+
+    // boosters
+    this.boosters = { ...EconomyManager.getBoosters() };
+    Object.entries(this.diff.startingBoosters).forEach(([k, v]) => { if (!this.boosters[k]) this.boosters[k] = v; });
+
+    // UI
+    this._updateWalletUI();
+    this._updateHUD();
+    this._refreshBoosterUI();
+    this._refreshNextPreview();
+    this.bestEl.textContent = SaveManager.getHighScore(this.mode);
+  }
+
+  _restart() { this._initNewGame(); }
+
+  // ---------- grid helpers ----------
+  _colsForRow(r) { return (r & 1) ? this.colsEven - 1 : this.colsEven; }
+  _inBounds(r, c) { return r >= 0 && c >= 0 && c < this._colsForRow(r); }
+  _key(r, c) { return r + ',' + c; }
+
+  _cellToWorld(r, c) {
+    const off = (r & 1) ? this.cellD / 2 : 0;
+    return { x: this.originX + c * this.cellD + off, y: this.originY + r * this.rowH };
+  }
+
+  _worldToCell(x, y) {
+    let r = Math.round((y - this.originY) / this.rowH);
+    if (r < 0) r = 0;
+    const off = (r & 1) ? this.cellD / 2 : 0;
+    let c = Math.round((x - this.originX - off) / this.cellD);
+    const cols = this._colsForRow(r);
+    if (c < 0) c = 0; if (c > cols - 1) c = cols - 1;
+    return { r, c };
+  }
+
+  _neighbors(r, c) {
+    const base = [[r, c - 1], [r, c + 1]];
+    if (r & 1) { // odd row shifted right
+      return base.concat([[r - 1, c], [r - 1, c + 1], [r + 1, c], [r + 1, c + 1]]);
+    }
+    return base.concat([[r - 1, c - 1], [r - 1, c], [r + 1, c - 1], [r + 1, c]]);
+  }
+
+  _seed() { return (Math.random() * 100000) | 0; }
+  _newEgg() { return { color: this._randColorIdx(), seed: this._seed() }; }
+
+  _randColorIdx() {
+    const n = this.colorsInPlay;
+    if (this.grid && this.grid.size && Math.random() < 0.6) {
+      const present = [...new Set([...this.grid.values()].map((v) => v.color))].filter((c) => c < n);
+      if (present.length) return present[(Math.random() * present.length) | 0];
+    }
+    return (Math.random() * n) | 0;
+  }
+
+  _rowEvery() { return Math.max(3, this.diff.rowEveryShots - Math.floor((this.level - 1) / 2)); }
+
+  _fillWave(rows) {
+    for (let r = 0; r < rows; r++) {
+      const cols = this._colsForRow(r);
+      for (let c = 0; c < cols; c++) {
+        // top rows are dense (anchor); lower rows a touch sparser for shape
+        const p = r === 0 ? 0.96 : 0.82 - r * 0.04;
+        if (Math.random() < p) this.grid.set(this._key(r, c), { r, c, color: (Math.random() * this.colorsInPlay) | 0, seed: this._seed() });
+      }
+    }
+  }
+
+  // ---------- input ----------
+  _setupInput() {
+    const canvas = this.canvas;
+    const toPlay = (evt) => {
+      const rect = canvas.getBoundingClientRect();
+      const t = evt.touches ? evt.touches[0] : evt;
+      return {
+        x: (t.clientX - rect.left) * (PLAY_AREA.width / rect.width),
+        y: (t.clientY - rect.top) * (PLAY_AREA.height / rect.height),
+      };
+    };
+    const down = (e) => {
+      if (this.paused || this.gameOver) return;
+      AudioManager.resume();
+      e.preventDefault();
+      this._aiming = true;
+      this.aim = toPlay(e);
+    };
+    const move = (e) => {
+      if (this.paused || this.gameOver) return;
+      this.aim = toPlay(e);
+    };
+    const up = (e) => {
+      if (!this._aiming) return;
+      this._aiming = false;
+      if (this.paused || this.gameOver) return;
+      if (e.cancelable) e.preventDefault();
+      this.aim = toPlay(e);
+      this._fire();
+    };
+    canvas.addEventListener('pointerdown', down, { passive: false });
+    canvas.addEventListener('pointermove', move, { passive: false });
+    window.addEventListener('pointerup', up, { passive: false });
+    window.addEventListener('pointercancel', () => { this._aiming = false; }, { passive: false });
+  }
+
+  _aimAngle() {
+    const dx = this.aim.x - this.cannon.x;
+    let dy = this.aim.y - this.cannon.y;
+    if (dy > -8) dy = -8; // force an upward shot
+    let ang = Math.atan2(dy, dx); // (-π, 0)
+    const min = -Math.PI + 0.16, max = -0.16;
+    return Math.max(min, Math.min(max, ang));
+  }
+
+  _fire() {
+    if (this.projectile || this.gameOver || this.paused) return;
+    const ang = this._aimAngle();
+    this.projectile = {
+      x: this.cannon.x, y: this.cannon.y,
+      vx: Math.cos(ang) * SHOT_SPEED, vy: Math.sin(ang) * SHOT_SPEED,
+      color: this.current.color, seed: this.current.seed,
+      bomb: this.curBomb, rainbow: this.curRainbow,
+    };
+    AudioManager.playWoosh();
+    this.curBomb = false; this.curRainbow = false;
+    this.current = this.next;
+    this.next = this._newEgg();
+    this._refreshNextPreview();
+  }
+
+  // ---------- projectile / settle ----------
+  _updateProjectile(dt) {
+    const p = this.projectile;
+    const steps = Math.max(1, Math.ceil((SHOT_SPEED * dt) / (this.eggR * 0.5)));
+    const h = dt / steps;
+    const left = this.marginX + this.eggR, right = PLAY_AREA.width - this.marginX - this.eggR;
+    for (let i = 0; i < steps; i++) {
+      p.x += p.vx * h; p.y += p.vy * h;
+      if (p.x < left) { p.x = left; p.vx = Math.abs(p.vx); }
+      else if (p.x > right) { p.x = right; p.vx = -Math.abs(p.vx); }
+      if (p.y <= this.originY) { this._settle(p, null); return; }
+      const hit = this._collideEgg(p.x, p.y);
+      if (hit) { this._settle(p, hit); return; }
+    }
+  }
+
+  _collideEgg(x, y) {
+    const rr = (this.eggR * 2 * 0.86) ** 2;
+    let best = null, bd = rr;
+    for (const v of this.grid.values()) {
+      const w = this._cellToWorld(v.r, v.c);
+      const d = (w.x - x) ** 2 + (w.y - y) ** 2;
+      if (d <= bd) { bd = d; best = { r: v.r, c: v.c }; }
+    }
+    return best;
+  }
+
+  _placeCell(px, py, hit) {
+    const cand = [];
+    const seen = new Set();
+    const add = (r, c) => {
+      const k = this._key(r, c);
+      if (seen.has(k)) return; seen.add(k);
+      if (this._inBounds(r, c) && !this.grid.has(k)) cand.push({ r, c });
+    };
+    if (hit) for (const [r, c] of this._neighbors(hit.r, hit.c)) add(r, c);
+    const rc = this._worldToCell(px, py);
+    add(rc.r, rc.c);
+    for (const [r, c] of this._neighbors(rc.r, rc.c)) add(r, c);
+    if (!cand.length) for (let dr = -1; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) add(rc.r + dr, rc.c + dc);
+    let best = null, bd = 1e18;
+    for (const k of cand) {
+      const w = this._cellToWorld(k.r, k.c);
+      const d = (w.x - px) ** 2 + (w.y - py) ** 2;
+      if (d < bd) { bd = d; best = k; }
+    }
+    return best;
+  }
+
+  _settle(p, hit) {
+    const cell = this._placeCell(p.x, p.y, hit);
+    this.projectile = null;
+    if (!cell) { this._afterShot(false); return; }
+
+    let color = p.color;
+    if (p.rainbow) color = this._dominantNeighborColor(cell) ?? color;
+    this.grid.set(this._key(cell.r, cell.c), { r: cell.r, c: cell.c, color, seed: p.seed });
+
+    let scored = false;
+    if (p.bomb) {
+      this._bombAt(cell);
+      scored = true;
+    } else {
+      const cluster = this._cluster(cell.r, cell.c, color);
+      if (cluster.length >= 3) { this._popCluster(cluster); scored = true; }
+      else {
+        const w = this._cellToWorld(cell.r, cell.c);
+        this.particles.drop(w.x, w.y, EGG_COLORS[color].glow);
+        AudioManager.playThud(0.35, 2);
+      }
+    }
+    if (this._dropFloaters() > 0) scored = true;
+    this._afterShot(scored);
+  }
+
+  _dominantNeighborColor(cell) {
+    const counts = {};
+    let best = null, bc = 0;
+    for (const [r, c] of this._neighbors(cell.r, cell.c)) {
+      const v = this.grid.get(this._key(r, c));
+      if (!v) continue;
+      counts[v.color] = (counts[v.color] || 0) + 1;
+      if (counts[v.color] > bc) { bc = counts[v.color]; best = v.color; }
+    }
+    return best;
+  }
+
+  _cluster(r, c, color) {
+    const out = [], seen = new Set([this._key(r, c)]);
+    const stack = [{ r, c }];
+    while (stack.length) {
+      const cur = stack.pop();
+      const v = this.grid.get(this._key(cur.r, cur.c));
+      if (!v || v.color !== color) continue;
+      out.push(cur);
+      for (const [nr, nc] of this._neighbors(cur.r, cur.c)) {
+        const nk = this._key(nr, nc);
+        if (seen.has(nk)) continue;
+        const nv = this.grid.get(nk);
+        if (nv && nv.color === color) { seen.add(nk); stack.push({ r: nr, c: nc }); }
+      }
+    }
+    return out;
+  }
+
+  _popCluster(cluster) {
+    const n = cluster.length;
+    let cx = 0, cy = 0;
+    for (const k of cluster) {
+      const w = this._cellToWorld(k.r, k.c);
+      cx += w.x; cy += w.y;
+      const col = EGG_COLORS[this.grid.get(this._key(k.r, k.c)).color];
+      this.particles.burst(w.x, w.y, [col.glow, col.shell, '#ffffff'], Math.min(11, n));
+      this.grid.delete(this._key(k.r, k.c));
+    }
+    cx /= n; cy /= n;
+    const mul = 1 + this.combo * 0.3;
+    const pts = Math.round(n * 10 * mul + Math.max(0, n - 3) * 15);
+    this.score += pts;
+    this.popups.add('+' + pts, cx, cy, { color: '#ffffff', size: 22 + Math.min(16, n) });
+    this.particles.shockwave(cx, cy, this.theme.accent2 || '#fff', 56 + n * 6, 4);
+    this.particles.flash(cx, cy, 56 + n * 4, 'rgba(255,255,255,0.5)');
+    this.shake.trigger(Math.min(16, 4 + n), 0.25);
+    AudioManager.playMerge(Math.min(11, 2 + n));
+    ProgressManager.noteMerge(n);
+    const coins = Math.max(1, Math.round((n / 3) * this.diff.coinReward));
+    this._flyCoins(coins, cx, cy);
+    ProgressManager.progressDaily('merges', 1);
+    if (n >= 5) { const d = ProgressManager.progressDaily('big', 1); if (d) this._onDailyComplete(d); }
+  }
+
+  _dropFloaters() {
+    const anchored = new Set();
+    const stack = [];
+    for (const [k, v] of this.grid) if (v.r === 0) { anchored.add(k); stack.push(v); }
+    while (stack.length) {
+      const cur = stack.pop();
+      for (const [nr, nc] of this._neighbors(cur.r, cur.c)) {
+        const nk = this._key(nr, nc);
+        if (this.grid.has(nk) && !anchored.has(nk)) { anchored.add(nk); stack.push(this.grid.get(nk)); }
+      }
+    }
+    let dropped = 0, cx = 0, cy = 0;
+    for (const [k, v] of [...this.grid]) {
+      if (!anchored.has(k)) {
+        const w = this._cellToWorld(v.r, v.c);
+        this.particles.burst(w.x, w.y, [EGG_COLORS[v.color].glow, '#ffffff'], 4);
+        this.particles.confetti(w.x, w.y);
+        this.grid.delete(k);
+        dropped++; cx += w.x; cy += w.y;
+      }
+    }
+    if (dropped > 0) {
+      cx /= dropped; cy /= dropped;
+      const pts = dropped * 25;
+      this.score += pts;
+      this.popups.add('DROP +' + pts, cx, cy, { color: '#ffd166', size: 24 });
+      AudioManager.playReward();
+      this._flyCoins(Math.max(1, Math.round((dropped / 2) * this.diff.coinReward)), cx, cy);
+      ProgressManager.noteMerge(dropped);
+    }
+    return dropped;
+  }
+
+  _bombAt(cell) {
+    const w0 = this._cellToWorld(cell.r, cell.c);
+    const R = this.cellD * 1.7;
+    let cnt = 0;
+    for (const [k, v] of [...this.grid]) {
+      const w = this._cellToWorld(v.r, v.c);
+      if ((w.x - w0.x) ** 2 + (w.y - w0.y) ** 2 <= R * R) {
+        this.particles.burst(w.x, w.y, [EGG_COLORS[v.color].glow, '#fff'], 6);
+        this.grid.delete(k); cnt++;
+      }
+    }
+    this.score += cnt * 12;
+    this.shake.trigger(18, 0.4);
+    this.particles.flash(w0.x, w0.y, 150, 'rgba(255,200,80,0.7)');
+    this.particles.shockwave(w0.x, w0.y, '#ffb072', 150, 5);
+    AudioManager.playGameOver();
+    this.popups.add('BOOM +' + cnt * 12, w0.x, w0.y - 16, { color: '#ffb072', size: 26 });
+    this._flyCoins(Math.max(1, Math.round(cnt / 3)), w0.x, w0.y);
+  }
+
+  _afterShot(scored) {
+    if (scored) {
+      this.combo++;
+      ProgressManager.noteCombo(this.combo);
+      if (this.combo >= 2) this._showCombo(this.combo);
+      const d = ProgressManager.progressDaily('score', this.score, true);
+      if (d) this._onDailyComplete(d);
+    } else {
+      this.combo = 0;
+    }
+    this.shotsLeft--;
+    if (this.shotsLeft <= 0) { this._addRow(); this.shotsLeft = this._rowEvery(); }
+    if (this.grid.size === 0) this._boardCleared();
+    this._checkLevelUp();
+    this._updateHUD();
+    this._checkDeath();
+  }
+
+  _addRow() {
+    if (this.gameOver) return;
+    const ng = new Map();
+    for (const [, v] of this.grid) {
+      const nr = v.r + 1;
+      ng.set(this._key(nr, v.c), { r: nr, c: v.c, color: v.color, seed: v.seed });
+    }
+    const cols = this._colsForRow(0);
+    for (let c = 0; c < cols; c++) {
+      if (Math.random() < 0.85) ng.set(this._key(0, c), { r: 0, c, color: (Math.random() * this.colorsInPlay) | 0, seed: this._seed() });
+    }
+    this.grid = ng;
+    this.shake.trigger(5, 0.2);
+    AudioManager.playDrop();
+  }
+
+  _boardCleared() {
+    this.score += 500;
+    this.popups.add('NEST CLEARED +500', PLAY_AREA.width / 2, PLAY_AREA.height * 0.4, { color: '#caffbf', size: 26 });
+    this.particles.confetti(PLAY_AREA.width / 2, PLAY_AREA.height * 0.4);
+    this.particles.flash(PLAY_AREA.width / 2, PLAY_AREA.height * 0.4, 260, 'rgba(255,255,255,0.6)');
+    AudioManager.playNewRecord();
+    ProgressManager.noteClear();
+    this._flyCoins(Math.round(40 * this.diff.coinReward), PLAY_AREA.width / 2, PLAY_AREA.height * 0.4);
+    this._fillWave(this.diff.startRows);
+    this.shotsLeft = this._rowEvery();
+  }
+
+  _checkDeath() {
+    let maxY = -1;
+    for (const v of this.grid.values()) {
+      const y = this.originY + v.r * this.rowH;
+      if (y > maxY) maxY = y;
+    }
+    this._dangerNear = maxY > this.deathY - this.rowH * 1.5;
+    if (maxY + this.eggR * 0.2 >= this.deathY) this._triggerGameOver();
+  }
+
+  // ---------- level / theme ----------
+  _checkLevelUp() {
+    const newLevel = levelForScore(this.score);
+    if (newLevel > this.level) this._levelUp(newLevel);
+  }
+
+  _levelUp(newLevel) {
+    this.level = newLevel;
+    const theme = themeForLevel(newLevel);
+    if (theme.key !== this.theme.key) {
+      this.bgPrev = this.bgImg;
+      this.theme = theme;
+      this.bgImg = AssetManager.get(theme.bg);
+      this.bgFade = 0;
+    } else {
+      this.theme = theme;
+    }
+    ProgressManager.noteLevel(newLevel);
+    AudioManager.playLevelUp();
+    this.shake.trigger(8, 0.4);
+    this.particles.flash(PLAY_AREA.width / 2, PLAY_AREA.height / 2, 320, 'rgba(255,255,255,0.5)');
+    this._flyCoins(15 + newLevel * 3, PLAY_AREA.width / 2, PLAY_AREA.height * 0.5);
+    this._showLevelBanner(newLevel, theme);
+  }
+
+  _onDailyComplete(ch) {
+    EconomyManager.addCoins(ch.reward);
+    this.walletCount = EconomyManager.coins;
+    this._updateWalletUI();
+    this.popups.add(`DAILY ✓ +${ch.reward}`, PLAY_AREA.width / 2, PLAY_AREA.height * 0.45, { color: '#9bf6ff', size: 24 });
+    AudioManager.playReward();
+  }
+
+  // ---------- boosters ----------
+  _useBooster(key) {
+    if (!this.boosters[key] || this.boosters[key] <= 0) { this._toast('Out of boosters'); return; }
+    if (this.gameOver || this.paused) return;
+    AudioManager.playClick();
+    if (key === 'freeze') {
+      // push-back: remove the lowest (most dangerous) row
+      this._removeLowestRow();
+      this.boosters.freeze -= 1;
+    } else if (key === 'bomb') {
+      this.curBomb = true; this.curRainbow = false;
+      this.boosters.bomb -= 1;
+      this._toast('💣 Bomb egg — fire it!');
+    } else if (key === 'hammer') {
+      this.curRainbow = true; this.curBomb = false;
+      this.boosters.hammer -= 1;
+      this._toast('🌈 Rainbow egg — matches any!');
+    }
+    this._refreshBoosterUI();
+    EconomyManager.setBoosters(this.boosters);
+  }
+
+  _removeLowestRow() {
+    let maxR = -1;
+    for (const v of this.grid.values()) if (v.r > maxR) maxR = v.r;
+    if (maxR < 0) return;
+    for (const [k, v] of [...this.grid]) {
+      if (v.r === maxR) {
+        const w = this._cellToWorld(v.r, v.c);
+        this.particles.burst(w.x, w.y, [EGG_COLORS[v.color].glow, '#fff'], 4);
+        this.grid.delete(k);
+      }
+    }
+    this.shake.trigger(6, 0.25);
+    AudioManager.playWoosh();
+    this.popups.add('PUSH BACK', PLAY_AREA.width / 2, this.deathY - 30, { color: '#7ad7f0', size: 24 });
+    this._dropFloaters();
+    this._checkDeath();
+  }
+
+  // ---------- coins / wallet ----------
+  _walletTargetCoords() {
+    const canvas = this.canvas, wallet = this.walletEl;
+    if (!canvas || !wallet) return [PLAY_AREA.width / 2, 44];
+    const cr = canvas.getBoundingClientRect();
+    const wr = wallet.getBoundingClientRect();
+    return [
+      (wr.left + wr.width / 2 - cr.left) * (PLAY_AREA.width / cr.width),
+      (wr.top + wr.height / 2 - cr.top) * (PLAY_AREA.height / cr.height),
+    ];
+  }
+
+  _flyCoins(amount, x, y) {
+    if (amount <= 0) return;
+    this.runCoins += amount;
+    const [tx, ty] = this._walletTargetCoords();
+    const n = Math.min(16, Math.max(3, Math.round(amount / 2)));
+    this.coinFly.spawn(n, x, y, tx, ty, {
+      onAllDone: () => {
+        EconomyManager.addCoins(amount);
+        this.walletCount = EconomyManager.coins;
+        this._updateWalletUI();
+        this._bumpWallet();
+        AudioManager.playCoin();
+      },
+    });
+  }
+
+  _updateWalletUI() { if (this.walletCountEl) this.walletCountEl.textContent = this.walletCount; }
+  _bumpWallet() {
+    if (!this.walletEl) return;
+    this.walletEl.classList.remove('bump');
+    void this.walletEl.offsetWidth;
+    this.walletEl.classList.add('bump');
+  }
+
+  // ---------- banners ----------
+  _showCombo(n) {
+    const b = this.comboBanner; if (!b) return;
+    b.textContent = 'COMBO ×' + n + '!';
+    b.classList.remove('hidden', 'show');
+    void b.offsetWidth;
+    b.classList.add('show');
+    AudioManager.playCombo(n);
+    clearTimeout(this._comboTo);
+    this._comboTo = setTimeout(() => b.classList.remove('show'), 900);
+  }
+
+  _showLevelBanner(level, theme) {
+    if (!this.levelBanner) return;
+    this.levelBanner.textContent = `LEVEL ${level} · ${theme.name}`;
+    this.levelBanner.style.setProperty('--lvl-accent', theme.accent2);
+    this.levelBanner.classList.remove('hidden', 'show');
+    void this.levelBanner.offsetWidth;
+    this.levelBanner.classList.add('show');
+    clearTimeout(this._lvlTo);
+    this._lvlTo = setTimeout(() => this.levelBanner.classList.remove('show'), 2000);
+  }
+
+  _achToast(a) {
+    this._toast(`🏅 ${a.title}`);
+    AudioManager.playReward();
+  }
+
+  // ---------- HUD ----------
+  _updateHUD() {
+    this.scoreEl.textContent = this.score;
+    if (this.levelEl) this.levelEl.textContent = this.level;
+    if (this.levelFillEl) {
+      const next = nextThreshold(this.level);
+      if (next === null) this.levelFillEl.style.width = '100%';
+      else {
+        const prev = nextThreshold(this.level - 1) ?? 0;
+        const pct = Math.max(0, Math.min(100, ((this.score - prev) / (next - prev)) * 100));
+        this.levelFillEl.style.width = pct + '%';
+      }
+    }
+  }
+
+  _refreshNextPreview() {
+    const col = EGG_COLORS[this.next.color];
+    this.nextEl.style.background = `radial-gradient(circle at 32% 30%, ${col.glow}, ${col.shell} 62%, ${this._darken(col.shell, 0.25)})`;
+    this.nextEl.style.boxShadow = 'none';
+  }
+
+  _refreshBoosterUI() {
+    this.hammerEl.textContent = this.boosters.hammer || 0;
+    this.bombEl.textContent = this.boosters.bomb || 0;
+    this.freezeEl.textContent = this.boosters.freeze || 0;
+  }
+
+  // ---------- pause / game over ----------
+  pause() { if (this.gameOver) return; this.paused = true; this.pauseEl.classList.remove('hidden'); AudioManager.stopMusic(); }
+  resume() { this.paused = false; this.pauseEl.classList.add('hidden'); AudioManager.startMusic(); }
+
+  _triggerGameOver() {
+    if (this.gameOver) return;
+    this.gameOver = true;
+    this.projectile = null;
+    AudioManager.playGameOver();
+    this.shake.trigger(14, 0.6);
+    EconomyManager.setBoosters(this.boosters);
+    const coinReward = this.runCoins;
+    const isNew = SaveManager.setHighScore(this.mode, this.score);
+    const newlyAch = ProgressManager.recordGame(this.mode, this.score, this.level);
+    newlyAch.forEach((a, i) => setTimeout(() => this._achToast(a), 500 + i * 1500));
+    setTimeout(() => {
+      this._mgr.switchTo('gameover', {
+        score: this.score, coins: coinReward, level: this.level,
+        newRecord: isNew, mode: this.mode, revive: () => this._reviveFromAd(),
+      });
+    }, 600);
+  }
+
+  async _reviveFromAd() {
+    if (this.revivesUsed >= 1) return false;
+    this.revivesUsed++;
+    // remove the two lowest rows to relieve pressure
+    const rows = [...new Set([...this.grid.values()].map((v) => v.r))].sort((a, b) => b - a).slice(0, 2);
+    const kill = new Set(rows);
+    for (const [k, v] of [...this.grid]) {
+      if (kill.has(v.r)) {
+        const w = this._cellToWorld(v.r, v.c);
+        this.particles.burst(w.x, w.y, [EGG_COLORS[v.color].glow, '#fff'], 5);
+        this.grid.delete(k);
+      }
+    }
+    this.gameOver = false;
+    this._dropFloaters();
+    this.shake.trigger(6, 0.3);
+    AudioManager.playReward();
+    this.hudEl.classList.remove('hidden');
+    return true;
+  }
+
+  // ---------- update / draw ----------
+  update(dt) {
+    if (this.paused || this.gameOver) {
+      this.coinFly.update(dt);
+      return;
+    }
+    if (this.projectile) this._updateProjectile(dt);
+    this.particles.update(dt);
+    this.popups.update(dt);
+    this.shake.update(dt);
+    this.coinFly.update(dt);
+    if (this.bgFade < 1) this.bgFade = Math.min(1, this.bgFade + dt * 1.2);
+  }
+
+  draw(ctx) {
+    const W = PLAY_AREA.width, H = PLAY_AREA.height;
+    this._drawBackground(ctx, W, H);
+    const [sx, sy] = this.shake.getOffset();
+    ctx.save();
+    ctx.translate(sx, sy);
+
+    this._drawDeathLine(ctx);
+    for (const v of this.grid.values()) {
+      const w = this._cellToWorld(v.r, v.c);
+      this._drawEgg(ctx, w.x, w.y, v.color, v.seed);
+    }
+    if (!this.projectile && !this.gameOver && !this.paused) this._drawAim(ctx);
+    if (this.projectile) {
+      const p = this.projectile;
+      this._drawEgg(ctx, p.x, p.y, p.rainbow ? -1 : p.color, p.seed);
+    }
+    this._drawCannon(ctx);
+    this.particles.draw(ctx);
+    this.popups.draw(ctx);
+    ctx.restore();
+
+    this.coinFly.draw(ctx);
+  }
+
+  _drawBackground(ctx, W, H) {
+    ctx.fillStyle = this.theme.field || '#0a0524';
+    ctx.fillRect(0, 0, W, H);
+    if (this.bgFade < 1 && this.bgPrev) {
+      ctx.globalAlpha = (1 - this.bgFade) * (this.theme.dim ?? 0.5);
+      this._drawImageCover(ctx, this.bgPrev, W, H);
+      ctx.globalAlpha = 1;
+    }
+    if (this.bgImg && this.bgImg.complete && this.bgImg.naturalWidth) {
+      ctx.globalAlpha = (this.theme.dim ?? 0.5) * (this.bgFade < 1 ? this.bgFade : 1);
+      this._drawImageCover(ctx, this.bgImg, W, H);
+      ctx.globalAlpha = 1;
+    }
+    const g = ctx.createRadialGradient(W / 2, H * 0.42, 60, W / 2, H * 0.5, H * 0.78);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(1, this.theme.scrim || 'rgba(5,8,20,0.7)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  _drawImageCover(ctx, img, W, H) {
+    const ar = img.naturalWidth / img.naturalHeight;
+    const tar = W / H;
+    let dw, dh;
+    if (ar > tar) { dh = H; dw = H * ar; } else { dw = W; dh = W / ar; }
+    ctx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
+  }
+
+  _drawDeathLine(ctx) {
+    const y = this.deathY;
+    ctx.save();
+    ctx.setLineDash([10, 8]);
+    ctx.lineWidth = 2;
+    if (this._dangerNear) {
+      const a = 0.5 + 0.4 * Math.abs(Math.sin(performance.now() / 180));
+      ctx.strokeStyle = `rgba(255,80,90,${a})`;
+    } else {
+      ctx.strokeStyle = 'rgba(255,255,255,0.16)';
+    }
+    ctx.beginPath();
+    ctx.moveTo(this.marginX, y);
+    ctx.lineTo(PLAY_AREA.width - this.marginX, y);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  _drawAim(ctx) {
+    const ang = this._aimAngle();
+    let x = this.cannon.x, y = this.cannon.y;
+    let vx = Math.cos(ang), vy = Math.sin(ang);
+    const left = this.marginX + this.eggR, right = PLAY_AREA.width - this.marginX - this.eggR;
+    const step = 12;
+    let landing = null, lastHit = null;
+    ctx.save();
+    ctx.fillStyle = '#ffffff';
+    for (let i = 0; i < 150; i++) {
+      x += vx * step; y += vy * step;
+      if (x < left) { x = left; vx = Math.abs(vx); }
+      else if (x > right) { x = right; vx = -Math.abs(vx); }
+      if (y <= this.originY) { landing = { x, y }; break; }
+      const hit = this._collideEgg(x, y);
+      if (hit) { landing = { x, y }; lastHit = hit; break; }
+      if (i % 2 === 0) {
+        ctx.globalAlpha = 0.5 * (1 - i / 150);
+        ctx.beginPath();
+        ctx.arc(x, y, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+    if (landing) {
+      const cell = this._placeCell(landing.x, landing.y, lastHit);
+      if (cell) {
+        const w = this._cellToWorld(cell.r, cell.c);
+        ctx.save();
+        ctx.globalAlpha = 0.45;
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(w.x, w.y, this.eggR, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+  }
+
+  _drawCannon(ctx) {
+    const c = this.cannon;
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    this._roundRect(ctx, c.x - 44, c.y + 6, 88, 34, 12);
+    ctx.fill();
+    ctx.strokeStyle = this.theme.wallEdge || 'rgba(255,255,255,0.4)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+    if (this.current && !this.gameOver) {
+      this._drawEgg(ctx, c.x, c.y, this.curRainbow ? -1 : this.current.color, this.current.seed);
+      if (this.curBomb) {
+        ctx.save();
+        ctx.font = '20px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('💣', c.x, c.y + 1);
+        ctx.restore();
+      }
+    }
+  }
+
+  _spots(seed) {
+    if (this._spotCache.has(seed)) return this._spotCache.get(seed);
+    let s = seed || 1;
+    const rnd = () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+    const out = [];
+    const n = 4 + Math.floor(rnd() * 3);
+    for (let i = 0; i < n; i++) {
+      const a = rnd() * Math.PI * 2;
+      const rad = rnd() * 0.58;
+      out.push({ dx: Math.cos(a) * rad, dy: Math.sin(a) * rad - 0.08, rr: 0.09 + rnd() * 0.11 });
+    }
+    this._spotCache.set(seed, out);
+    return out;
+  }
+
+  _drawEgg(ctx, x, y, ci, seed) {
+    const rainbow = ci < 0;
+    const col = rainbow ? null : EGG_COLORS[ci];
+    const r = this.eggR;
+    ctx.save();
+    ctx.translate(x, y);
+    // shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+    ctx.beginPath();
+    ctx.ellipse(2, 3, r * 0.9, r * 1.02, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // shell
+    let g;
+    if (rainbow) {
+      g = ctx.createLinearGradient(-r, -r, r, r);
+      g.addColorStop(0, '#ff6b8c'); g.addColorStop(0.33, '#ffd23f');
+      g.addColorStop(0.66, '#5ed24f'); g.addColorStop(1, '#46b3ff');
+    } else {
+      g = ctx.createRadialGradient(-r * 0.32, -r * 0.42, r * 0.2, 0, 0, r * 1.15);
+      g.addColorStop(0, col.glow); g.addColorStop(0.55, col.shell); g.addColorStop(1, this._darken(col.shell, 0.24));
+    }
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r * 0.9, r * 1.03, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // speckles
+    if (!rainbow) {
+      ctx.fillStyle = this._rgba(col.spot, 0.85);
+      for (const sp of this._spots(seed)) {
+        ctx.beginPath();
+        ctx.ellipse(sp.dx * r, sp.dy * r, sp.rr * r, sp.rr * r * 0.8, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    // glossy highlight
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.beginPath();
+    ctx.ellipse(-r * 0.32, -r * 0.4, r * 0.26, r * 0.16, -0.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // ---------- colour helpers ----------
+  _parse(hex) {
+    const h = hex.replace('#', '');
+    return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+  }
+  _darken(hex, amt) {
+    const [r, g, b] = this._parse(hex);
+    const f = 1 - amt;
+    return `rgb(${(r * f) | 0},${(g * f) | 0},${(b * f) | 0})`;
+  }
+  _rgba(hex, a) {
+    const [r, g, b] = this._parse(hex);
+    return `rgba(${r},${g},${b},${a})`;
+  }
+  _roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  _toast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 1400);
+  }
+}
