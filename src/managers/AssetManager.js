@@ -4,7 +4,8 @@
 import { THEMES } from '../config/themes.js';
 
 export const COIN_SRC = 'assets/images/coin.png';
-export const UI_IMAGES = { coin: COIN_SRC };
+export const MENU_BG = 'assets/images/menu-bg.webp';
+export const UI_IMAGES = { coin: COIN_SRC, menuBg: MENU_BG };
 
 class _AssetManager {
   constructor() {
@@ -14,7 +15,7 @@ class _AssetManager {
 
   // Resolves when all images are loaded (or errored). onProgress(loaded,total).
   preload(onProgress) {
-    const paths = [COIN_SRC, ...THEMES.map((t) => t.bg)];
+    const paths = [COIN_SRC, MENU_BG, ...THEMES.map((t) => t.bg)];
     const total = paths.length;
     let loaded = 0;
 
