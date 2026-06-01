@@ -103,6 +103,18 @@ export class ParticleSystem {
     }
   }
 
+  // single faint dot — used for projectile motion trails (cheap, 1 particle)
+  trail(x, y, color = '#ffffff') {
+    const p = this._spawn();
+    if (!p) return;
+    p.x = x; p.y = y;
+    p.vx = (Math.random() - 0.5) * 26;
+    p.vy = (Math.random() - 0.5) * 26;
+    p.maxLife = 0.3; p.life = p.maxLife;
+    p.color = color; p.size = 3 + Math.random() * 2.5;
+    p.gravity = 0; p.fade = true; p.shape = 'circle';
+  }
+
   drop(x, y, color = '#ffffff') {
     for (let i = 0; i < 7; i++) {
       const p = this._spawn();

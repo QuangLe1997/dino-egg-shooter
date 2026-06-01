@@ -739,6 +739,17 @@ html, body {
     0 4px 10px rgba(0, 0, 0, 0.6);
   pointer-events: none;
   z-index: 6;
+  opacity: 0; /* hidden by default — only the .show animation reveals it */
+}
+
+.combo-banner.show { animation: combo-pop 0.9s cubic-bezier(0.2, 0.9, 0.3, 1.4) both; }
+
+@keyframes combo-pop {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.5); }
+  18%  { opacity: 1; transform: translate(-50%, -50%) scale(1.18); }
+  34%  { transform: translate(-50%, -50%) scale(1); }
+  72%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -62%) scale(0.92); }
 }
 
 /* DIALOGS ---------------------------------------------------- */

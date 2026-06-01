@@ -16,6 +16,8 @@ import { EconomyManager } from '../managers/EconomyManager.js';
 import { AssetManager } from '../managers/AssetManager.js';
 import { ProgressManager } from '../managers/ProgressManager.js';
 
+const AUTO_FIRE_SEC = 5; // auto-shoot if the player idles this long (tightens per level)
+
 export class GameScene {
   constructor() {
     this.canvas = document.getElementById('game');
@@ -117,6 +119,8 @@ export class GameScene {
     this.projectile = null;
     this.aim = { x: this.cannon.x, y: this.cannon.y - 200 };
     this._aiming = false;
+    this._idle = 0;     // seconds since last shot / interaction (auto-fire timer)
+    this._recoil = 0;   // cannon kick, decays to 0
     this.activeBooster = null;
     this.curBomb = false;
     this.curRainbow = false;
@@ -218,10 +222,12 @@ export class GameScene {
       AudioManager.resume();
       e.preventDefault();
       this._aiming = true;
+      this._idle = 0;
       this.aim = toPlay(e);
     };
     const move = (e) => {
       if (this.paused || this.gameOver) return;
+      this._idle = 0;
       this.aim = toPlay(e);
     };
     const up = (e) => {
@@ -257,11 +263,20 @@ export class GameScene {
       bomb: this.curBomb, rainbow: this.curRainbow,
     };
     AudioManager.playWoosh();
+    // kick + muzzle flash for a punchy launch
+    this._idle = 0;
+    this._recoil = 12;
+    const glow = this.curRainbow ? '#ffffff' : EGG_COLORS[this.current.color].glow;
+    this.particles.flash(this.cannon.x, this.cannon.y - 8, 70, glow);
+    this.particles.shockwave(this.cannon.x, this.cannon.y - 8, glow, 46, 3);
+    this.shake.trigger(5, 0.14);
     this.curBomb = false; this.curRainbow = false;
     this.current = this.next;
     this.next = this._newEgg();
     this._refreshNextPreview();
   }
+
+  _autoFireSec() { return Math.max(2.6, AUTO_FIRE_SEC - (this.level - 1) * 0.3); }
 
   // ---------- projectile / settle ----------
   _updateProjectile(dt) {
@@ -331,7 +346,9 @@ export class GameScene {
       else {
         const w = this._cellToWorld(cell.r, cell.c);
         this.particles.drop(w.x, w.y, EGG_COLORS[color].glow);
-        AudioManager.playThud(0.35, 2);
+        this.particles.shockwave(w.x, w.y, EGG_COLORS[color].glow, 32, 2);
+        this.shake.trigger(3, 0.1);
+        AudioManager.playThud(0.4, 2);
       }
     }
     if (this._dropFloaters() > 0) scored = true;
@@ -383,9 +400,13 @@ export class GameScene {
     const pts = Math.round(n * 10 * mul + Math.max(0, n - 3) * 15);
     this.score += pts;
     this.popups.add('+' + pts, cx, cy, { color: '#ffffff', size: 22 + Math.min(16, n) });
-    this.particles.shockwave(cx, cy, this.theme.accent2 || '#fff', 56 + n * 6, 4);
-    this.particles.flash(cx, cy, 56 + n * 4, 'rgba(255,255,255,0.5)');
-    this.shake.trigger(Math.min(16, 4 + n), 0.25);
+    this.particles.shockwave(cx, cy, this.theme.accent2 || '#fff', 64 + n * 8, 5);
+    this.particles.flash(cx, cy, 64 + n * 5, 'rgba(255,255,255,0.7)');
+    if (n >= 4) {
+      this.particles.shockwave(cx, cy, '#ffffff', 104 + n * 9, 3);
+      this.particles.confetti(cx, cy, [this.theme.accent, this.theme.accent2, '#fff']);
+    }
+    this.shake.trigger(Math.min(22, 6 + n * 1.4), 0.3);
     AudioManager.playMerge(Math.min(11, 2 + n));
     ProgressManager.noteMerge(n);
     const coins = Math.max(1, Math.round((n / 3) * this.diff.coinReward));
@@ -669,7 +690,7 @@ export class GameScene {
 
   // ---------- pause / game over ----------
   pause() { if (this.gameOver) return; this.paused = true; this.pauseEl.classList.remove('hidden'); AudioManager.stopMusic(); }
-  resume() { this.paused = false; this.pauseEl.classList.add('hidden'); AudioManager.startMusic(); }
+  resume() { this.paused = false; this._idle = 0; this.pauseEl.classList.add('hidden'); AudioManager.startMusic(); }
 
   _triggerGameOver() {
     if (this.gameOver) return;
@@ -704,6 +725,7 @@ export class GameScene {
       }
     }
     this.gameOver = false;
+    this._idle = 0;
     this._dropFloaters();
     this.shake.trigger(6, 0.3);
     AudioManager.playReward();
@@ -717,7 +739,18 @@ export class GameScene {
       this.coinFly.update(dt);
       return;
     }
-    if (this.projectile) this._updateProjectile(dt);
+    if (this.projectile) {
+      this._updateProjectile(dt);
+      if (this.projectile) {
+        const glow = this.projectile.rainbow ? '#ffffff' : EGG_COLORS[this.projectile.color].glow;
+        this.particles.trail(this.projectile.x, this.projectile.y, glow);
+      }
+    } else {
+      // idle auto-fire: shoot at the current aim if the player stalls
+      this._idle += dt;
+      if (this._idle >= this._autoFireSec()) this._fire();
+    }
+    if (this._recoil > 0) this._recoil = Math.max(0, this._recoil - dt * 60);
     this.particles.update(dt);
     this.popups.update(dt);
     this.shake.update(dt);
@@ -838,22 +871,40 @@ export class GameScene {
 
   _drawCannon(ctx) {
     const c = this.cannon;
+    const ry = (this._recoil || 0) * 0.5; // kick the loaded egg downward briefly
     ctx.save();
     ctx.fillStyle = 'rgba(0,0,0,0.4)';
-    this._roundRect(ctx, c.x - 44, c.y + 6, 88, 34, 12);
+    this._roundRect(ctx, c.x - 44, c.y + 6 + ry, 88, 34, 12);
     ctx.fill();
     ctx.strokeStyle = this.theme.wallEdge || 'rgba(255,255,255,0.4)';
     ctx.lineWidth = 2;
     ctx.stroke();
     ctx.restore();
     if (this.current && !this.gameOver) {
-      this._drawEgg(ctx, c.x, c.y, this.curRainbow ? -1 : this.current.color, this.current.seed);
+      const ey = c.y + ry;
+      // auto-fire countdown ring — depletes clockwise, pulses red when urgent
+      const t = Math.min(1, this._idle / this._autoFireSec());
+      if (t > 0.22 && !this.projectile) {
+        const remain = 1 - t;
+        ctx.save();
+        ctx.translate(c.x, ey);
+        ctx.lineWidth = 3.5;
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = t > 0.7
+          ? `rgba(255,86,96,${0.55 + 0.45 * Math.abs(Math.sin(performance.now() / 110))})`
+          : 'rgba(255,255,255,0.72)';
+        ctx.beginPath();
+        ctx.arc(0, 0, this.eggR + 8, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * remain);
+        ctx.stroke();
+        ctx.restore();
+      }
+      this._drawEgg(ctx, c.x, ey, this.curRainbow ? -1 : this.current.color, this.current.seed);
       if (this.curBomb) {
         ctx.save();
         ctx.font = '20px system-ui, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('💣', c.x, c.y + 1);
+        ctx.fillText('💣', c.x, ey + 1);
         ctx.restore();
       }
     }
@@ -874,44 +925,74 @@ export class GameScene {
     return out;
   }
 
-  _drawEgg(ctx, x, y, ci, seed) {
+  _drawEgg(ctx, x, y, ci, seed, scale = 1) {
     const rainbow = ci < 0;
     const col = rainbow ? null : EGG_COLORS[ci];
-    const r = this.eggR;
+    const r = this.eggR * scale;
     ctx.save();
     ctx.translate(x, y);
-    // shadow
-    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+
+    // soft coloured glow halo — makes eggs pop off the dark field
+    const haloCol = rainbow ? '#ffffff' : col.glow;
+    ctx.globalAlpha = 0.3;
+    const halo = ctx.createRadialGradient(0, 0, r * 0.55, 0, 0, r * 1.55);
+    halo.addColorStop(0, haloCol);
+    halo.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = halo;
     ctx.beginPath();
-    ctx.ellipse(2, 3, r * 0.9, r * 1.02, 0, 0, Math.PI * 2);
+    ctx.arc(0, 0, r * 1.55, 0, Math.PI * 2);
     ctx.fill();
-    // shell
+    ctx.globalAlpha = 1;
+
+    // contact shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';
+    ctx.beginPath();
+    ctx.ellipse(2, 3, r * 0.9, r * 1.03, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // glossy shell — bright hot-spot at the top for a candy sheen
     let g;
     if (rainbow) {
       g = ctx.createLinearGradient(-r, -r, r, r);
-      g.addColorStop(0, '#ff6b8c'); g.addColorStop(0.33, '#ffd23f');
-      g.addColorStop(0.66, '#5ed24f'); g.addColorStop(1, '#46b3ff');
+      g.addColorStop(0, '#ff5d8f'); g.addColorStop(0.3, '#ffd23f');
+      g.addColorStop(0.6, '#28e07a'); g.addColorStop(1, '#1fa8ff');
     } else {
-      g = ctx.createRadialGradient(-r * 0.32, -r * 0.42, r * 0.2, 0, 0, r * 1.15);
-      g.addColorStop(0, col.glow); g.addColorStop(0.55, col.shell); g.addColorStop(1, this._darken(col.shell, 0.24));
+      g = ctx.createRadialGradient(-r * 0.34, -r * 0.46, r * 0.12, 0, 0, r * 1.18);
+      g.addColorStop(0, '#ffffff');
+      g.addColorStop(0.16, col.glow);
+      g.addColorStop(0.56, col.shell);
+      g.addColorStop(1, this._darken(col.shell, 0.3));
     }
     ctx.fillStyle = g;
     ctx.beginPath();
-    ctx.ellipse(0, 0, r * 0.9, r * 1.03, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, 0, r * 0.9, r * 1.04, 0, 0, Math.PI * 2);
     ctx.fill();
+
+    // darker rim for crisp definition
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = rainbow ? 'rgba(255,255,255,0.5)' : this._rgba(col.spot, 0.55);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r * 0.9, r * 1.04, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
     // speckles
     if (!rainbow) {
-      ctx.fillStyle = this._rgba(col.spot, 0.85);
+      ctx.fillStyle = this._rgba(col.spot, 0.82);
       for (const sp of this._spots(seed)) {
         ctx.beginPath();
         ctx.ellipse(sp.dx * r, sp.dy * r, sp.rr * r, sp.rr * r * 0.8, 0, 0, Math.PI * 2);
         ctx.fill();
       }
     }
-    // glossy highlight
-    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+
+    // big soft highlight + tiny sparkle
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
     ctx.beginPath();
-    ctx.ellipse(-r * 0.32, -r * 0.4, r * 0.26, r * 0.16, -0.5, 0, Math.PI * 2);
+    ctx.ellipse(-r * 0.3, -r * 0.44, r * 0.3, r * 0.18, -0.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.beginPath();
+    ctx.arc(r * 0.26, -r * 0.5, r * 0.07, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }
