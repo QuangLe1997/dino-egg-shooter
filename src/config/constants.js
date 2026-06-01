@@ -15,7 +15,7 @@ export const DIFFICULTY = {
     startRows: 4,        // rows pre-filled at the top
     rowEveryShots: 9,    // a new row descends every N shots
     colors: 4,           // number of egg colours in play
-    dangerY: 588,        // lose if an egg centre passes this y
+    dangerY: 552,        // lose if an egg centre passes this y (above the slingshot)
     coinReward: 0.7,
     startingBoosters: { hammer: 3, bomb: 2, freeze: 3 },
   },
@@ -24,7 +24,7 @@ export const DIFFICULTY = {
     startRows: 5,
     rowEveryShots: 7,
     colors: 5,
-    dangerY: 574,
+    dangerY: 536,
     coinReward: 1.0,
     startingBoosters: { hammer: 2, bomb: 1, freeze: 2 },
   },
@@ -33,7 +33,7 @@ export const DIFFICULTY = {
     startRows: 6,
     rowEveryShots: 5,
     colors: 6,
-    dangerY: 560,
+    dangerY: 520,
     coinReward: 1.4,
     startingBoosters: { hammer: 1, bomb: 1, freeze: 1 },
   },

@@ -2,7 +2,7 @@
 
 A juicy **bubble-shooter** ("bắn trứng khủng long") built in pure HTML5 + Canvas. Aim, shoot and match **3+ same-colour dino eggs** to pop them; eggs cut off from the ceiling drop for bonus. No build step, no bundler — deploys straight to GitHub Pages.
 
-> Drag to aim, release to fire an egg up into the nest. Match 3+ of a colour to pop. Don't let the eggs cross the danger line.
+> Pull the slingshot back to aim and charge power, release to fire an egg up into the nest. Match 3+ of a colour to pop. Don't let the eggs cross the danger line.
 
 This game **reuses the engine** from its sibling [Suika Merge](https://github.com/QuangLe1997/suika-merge) — the scene manager, WebAudio SFX/music, particle/popup/shake/coin-fly effects, economy, achievements, daily challenge, themes and PWA shell are shared. Only the gameplay core (grid, aiming, matching) is new.
 
@@ -16,7 +16,7 @@ Installable as a PWA (Add to Home Screen) and playable offline after first load.
 
 **Core gameplay**
 - Classic **bubble shooter** on a hex/offset grid, rendered on Canvas 2D
-- **Drag-to-aim** with a dashed trajectory that bounces off the walls + a landing ghost
+- **Slingshot aiming** — pull the elastic band back (touch + drag) to set angle *and* power; pull harder for a faster, harder-hitting shot. Dashed trajectory bounces off the walls (hot-coloured at high power) with a landing ghost; stretch/release sound effects
 - **Match 3+** same-colour eggs → they pop (bigger clusters score more, with a juicy pitch ladder)
 - **Floating-cluster drop** — eggs no longer connected to the ceiling fall for bonus points
 - **Row feed** — a new row descends every few shots; clear the whole board for a big bonus and a fresh wave
@@ -96,8 +96,8 @@ Deploys directly from `main` / root, no build step:
 
 | Action | Input |
 |---|---|
-| Aim | Drag (mouse / finger) anywhere over the play area |
-| Shoot | Release |
+| Aim & power | Touch and **pull the slingshot back** — angle sets direction, pull distance sets power |
+| Shoot | Release (pull harder = faster, harder-hitting) |
 | Booster | Tap 🌈 / 💣 / ⬆️ in the bottom bar |
 | Pause | Top-right pause button |
 

@@ -24,4 +24,6 @@ export const GRID = {
   rowH: 45,     // ≈ cellD * 0.866 (hex vertical pitch)
 };
 
-export const SHOT_SPEED = 1080; // px/s projectile speed — punchy, snappy shots
+// Projectile speed scales with how far the slingshot is pulled (tension 0→1).
+export const SHOT_MIN = 640;
+export const SHOT_MAX = 1340;

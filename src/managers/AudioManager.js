@@ -8,6 +8,8 @@ class _AudioManager {
     this.musicGain = null;
     this.musicOsc = null;
     this.musicNodes = [];
+    this._stretchOsc = null;   // sustained "rubber-band tension" tone while aiming
+    this._stretchGain = null;
     this.settings = SaveManager.getSettings();
   }
 
@@ -134,6 +136,52 @@ class _AudioManager {
 
   playWoosh() {
     this._tone({ freq: 800, type: 'sine', dur: 0.18, decay: 0.16, vol: 0.2, freqEnd: 200 });
+  }
+
+  // ---------------- Slingshot ----------------
+  // A sustained creak that rises in pitch/volume as the band is stretched.
+  startStretch() {
+    if (!this.settings.sfx) return;
+    this._ensureCtx();
+    if (!this.ctx || this._stretchOsc) return;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.value = 120;
+    gain.gain.value = 0.0001;
+    osc.connect(gain);
+    gain.connect(this.master);
+    osc.start();
+    this._stretchOsc = osc;
+    this._stretchGain = gain;
+  }
+
+  updateStretch(t) {
+    if (!this._stretchOsc || !this.ctx) return;
+    const tt = Math.max(0, Math.min(1, t));
+    const now = this.ctx.currentTime;
+    this._stretchOsc.frequency.setTargetAtTime(120 + tt * 380, now, 0.03);
+    this._stretchGain.gain.setTargetAtTime(0.012 + tt * 0.06, now, 0.04);
+  }
+
+  stopStretch() {
+    if (this._stretchOsc && this.ctx) {
+      const now = this.ctx.currentTime;
+      try {
+        this._stretchGain.gain.setTargetAtTime(0.0001, now, 0.03);
+        this._stretchOsc.stop(now + 0.12);
+      } catch {}
+    }
+    this._stretchOsc = null;
+    this._stretchGain = null;
+  }
+
+  // Springy "thwip" when the band is released — brighter/louder with power.
+  playTwang(power = 0.6) {
+    if (!this.settings.sfx) return;
+    const p = Math.max(0, Math.min(1, power));
+    this._tone({ freq: 240 + p * 260, type: 'triangle', dur: 0.2, decay: 0.18, vol: 0.16 + p * 0.2, freqEnd: 90 });
+    setTimeout(() => this._tone({ freq: 680 + p * 520, type: 'sine', dur: 0.12, decay: 0.12, vol: 0.1 + p * 0.12, freqEnd: 200 }), 16);
   }
 
   // ---------------- MUSIC (very gentle ambient pad) ----------------

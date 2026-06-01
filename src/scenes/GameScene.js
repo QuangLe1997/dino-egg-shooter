@@ -4,7 +4,7 @@
 // A new row descends every few shots; lose if an egg crosses the danger line.
 
 import { PLAY_AREA, DIFFICULTY } from '../config/constants.js';
-import { EGG_COLORS, GRID, SHOT_SPEED } from '../config/eggs.js';
+import { EGG_COLORS, GRID, SHOT_MIN, SHOT_MAX } from '../config/eggs.js';
 import { levelForScore, themeForLevel, nextThreshold } from '../config/themes.js';
 import { ParticleSystem } from '../effects/Particles.js';
 import { PopupSystem } from '../effects/Popups.js';
@@ -59,7 +59,9 @@ export class GameScene {
     this.boosterBtns = [...document.querySelectorAll('.booster-btn')];
     this.boosterBtns.forEach((btn) => btn.addEventListener('click', () => this._useBooster(btn.dataset.booster)));
 
-    this.cannon = { x: PLAY_AREA.width / 2, y: 628 };
+    this.anchor = { x: PLAY_AREA.width / 2, y: 590 }; // slingshot pouch rest point
+    this.maxPull = 58;   // max ball offset from the anchor (stays above the booster bar)
+    this.minPull = 13;   // below this on release = no shot (snaps back)
     this._setupInput();
   }
 
@@ -117,10 +119,12 @@ export class GameScene {
     this.gameOver = false;
     this.paused = false;
     this.projectile = null;
-    this.aim = { x: this.cannon.x, y: this.cannon.y - 200 };
+    this.pull = { x: 0, y: 0 };  // slingshot pull vector (ball offset from anchor)
+    this._pullLen = 0;
+    this._tension = 0;           // 0..1 → shot power
     this._aiming = false;
     this._idle = 0;     // seconds since last shot / interaction (auto-fire timer)
-    this._recoil = 0;   // cannon kick, decays to 0
+    this._recoil = 0;   // launch kick, decays to 0
     this.activeBooster = null;
     this.curBomb = false;
     this.curRainbow = false;
@@ -218,62 +222,92 @@ export class GameScene {
       };
     };
     const down = (e) => {
-      if (this.paused || this.gameOver) return;
+      if (this.paused || this.gameOver || this.projectile) return;
       AudioManager.resume();
       e.preventDefault();
       this._aiming = true;
       this._idle = 0;
-      this.aim = toPlay(e);
+      this._updatePull(toPlay(e));
+      AudioManager.startStretch();
+      AudioManager.updateStretch(this._tension);
     };
     const move = (e) => {
-      if (this.paused || this.gameOver) return;
+      if (!this._aiming || this.paused || this.gameOver) return;
+      e.preventDefault();
       this._idle = 0;
-      this.aim = toPlay(e);
+      this._updatePull(toPlay(e));
+      AudioManager.updateStretch(this._tension);
     };
     const up = (e) => {
       if (!this._aiming) return;
       this._aiming = false;
-      if (this.paused || this.gameOver) return;
+      AudioManager.stopStretch();
+      if (this.paused || this.gameOver) { this._resetPull(); return; }
       if (e.cancelable) e.preventDefault();
-      this.aim = toPlay(e);
-      this._fire();
+      this._updatePull(toPlay(e));
+      if (this._pullLen >= this.minPull) this._fire();
+      else this._resetPull(); // too weak — snap back, no shot
     };
     canvas.addEventListener('pointerdown', down, { passive: false });
     canvas.addEventListener('pointermove', move, { passive: false });
     window.addEventListener('pointerup', up, { passive: false });
-    window.addEventListener('pointercancel', () => { this._aiming = false; }, { passive: false });
+    window.addEventListener('pointercancel', () => { this._aiming = false; AudioManager.stopStretch(); this._resetPull(); }, { passive: false });
   }
 
-  _aimAngle() {
-    const dx = this.aim.x - this.cannon.x;
-    let dy = this.aim.y - this.cannon.y;
-    if (dy > -8) dy = -8; // force an upward shot
-    let ang = Math.atan2(dy, dx); // (-π, 0)
-    const min = -Math.PI + 0.16, max = -0.16;
-    return Math.max(min, Math.min(max, ang));
+  // Pull the pouch toward the finger; the shot launches the OPPOSITE way (like a
+  // real slingshot). Clamp to an upward cone and a max stretch.
+  _updatePull(p) {
+    let dx = p.x - this.anchor.x;
+    let dy = p.y - this.anchor.y;
+    if (dy < 6) dy = 6; // must pull downward → launches upward
+    let ang = Math.atan2(dy, dx);                  // pull angle, downward ∈ (0, π)
+    const minAng = 0.34, maxAng = Math.PI - 0.34;  // keep the launch off the side walls
+    ang = Math.max(minAng, Math.min(maxAng, ang));
+    const len = Math.min(this.maxPull, Math.hypot(dx, dy));
+    this.pull = { x: Math.cos(ang) * len, y: Math.sin(ang) * len };
+    this._pullLen = len;
+    this._tension = Math.max(0, Math.min(1, (len - this.minPull) / (this.maxPull - this.minPull)));
+  }
+
+  _resetPull() { this.pull = { x: 0, y: 0 }; this._pullLen = 0; this._tension = 0; }
+
+  // launch direction (unit) = opposite the pull; defaults to straight up
+  _launchDir() {
+    const len = this._pullLen;
+    if (len < 0.01) return { x: 0, y: -1 };
+    return { x: -this.pull.x / len, y: -this.pull.y / len };
   }
 
   _fire() {
-    if (this.projectile || this.gameOver || this.paused) return;
-    const ang = this._aimAngle();
+    if (this.projectile || this.gameOver || this.paused) return false;
+    const len = this._pullLen || 0;
+    if (len < this.minPull) { this._resetPull(); return false; }
+    const t = this._tension;
+    const speed = SHOT_MIN + t * (SHOT_MAX - SHOT_MIN);
+    const dir = this._launchDir();
+    const a = this.anchor;
     this.projectile = {
-      x: this.cannon.x, y: this.cannon.y,
-      vx: Math.cos(ang) * SHOT_SPEED, vy: Math.sin(ang) * SHOT_SPEED,
+      x: a.x, y: a.y,
+      vx: dir.x * speed, vy: dir.y * speed,
       color: this.current.color, seed: this.current.seed,
       bomb: this.curBomb, rainbow: this.curRainbow,
+      power: t,
     };
-    AudioManager.playWoosh();
-    // kick + muzzle flash for a punchy launch
+    // release feedback — twang scales with power, plus kick / flash / haptic
+    AudioManager.playTwang(t);
+    if (navigator.vibrate && SaveManager.getSettings().vibe) navigator.vibrate(Math.round(10 + t * 45));
     this._idle = 0;
-    this._recoil = 12;
+    this._recoil = 8 + t * 16;
     const glow = this.curRainbow ? '#ffffff' : EGG_COLORS[this.current.color].glow;
-    this.particles.flash(this.cannon.x, this.cannon.y - 8, 70, glow);
-    this.particles.shockwave(this.cannon.x, this.cannon.y - 8, glow, 46, 3);
-    this.shake.trigger(5, 0.14);
+    this.particles.flash(a.x, a.y - 6, 50 + t * 40, glow);
+    this.particles.shockwave(a.x, a.y - 6, glow, 38 + t * 36, 3);
+    this.shake.trigger(3 + t * 6, 0.14);
     this.curBomb = false; this.curRainbow = false;
     this.current = this.next;
     this.next = this._newEgg();
+    this._resetPull();
     this._refreshNextPreview();
+    return true;
   }
 
   _autoFireSec() { return Math.max(2.6, AUTO_FIRE_SEC - (this.level - 1) * 0.3); }
@@ -281,7 +315,7 @@ export class GameScene {
   // ---------- projectile / settle ----------
   _updateProjectile(dt) {
     const p = this.projectile;
-    const steps = Math.max(1, Math.ceil((SHOT_SPEED * dt) / (this.eggR * 0.5)));
+    const steps = Math.max(1, Math.ceil((SHOT_MAX * dt) / (this.eggR * 0.5)));
     const h = dt / steps;
     const left = this.marginX + this.eggR, right = PLAY_AREA.width - this.marginX - this.eggR;
     for (let i = 0; i < steps; i++) {
@@ -745,10 +779,15 @@ export class GameScene {
         const glow = this.projectile.rainbow ? '#ffffff' : EGG_COLORS[this.projectile.color].glow;
         this.particles.trail(this.projectile.x, this.projectile.y, glow);
       }
-    } else {
-      // idle auto-fire: shoot at the current aim if the player stalls
+    } else if (!this._aiming) {
+      // idle auto-fire: a medium-power straight-up shot if the player stalls
       this._idle += dt;
-      if (this._idle >= this._autoFireSec()) this._fire();
+      if (this._idle >= this._autoFireSec()) {
+        this.pull = { x: 0, y: this.minPull + (this.maxPull - this.minPull) * 0.55 };
+        this._pullLen = this.pull.y;
+        this._tension = 0.55;
+        this._fire();
+      }
     }
     if (this._recoil > 0) this._recoil = Math.max(0, this._recoil - dt * 60);
     this.particles.update(dt);
@@ -775,7 +814,7 @@ export class GameScene {
       const p = this.projectile;
       this._drawEgg(ctx, p.x, p.y, p.rainbow ? -1 : p.color, p.seed);
     }
-    this._drawCannon(ctx);
+    this._drawSlingshot(ctx);
     this.particles.draw(ctx);
     this.popups.draw(ctx);
     ctx.restore();
@@ -830,15 +869,19 @@ export class GameScene {
   }
 
   _drawAim(ctx) {
-    const ang = this._aimAngle();
-    let x = this.cannon.x, y = this.cannon.y;
-    let vx = Math.cos(ang), vy = Math.sin(ang);
+    const aiming = this._pullLen >= this.minPull;
+    const dir = aiming ? this._launchDir() : { x: 0, y: -1 };
+    const a = this.anchor;
+    let x = a.x, y = a.y;
+    let vx = dir.x, vy = dir.y;
     const left = this.marginX + this.eggR, right = PLAY_AREA.width - this.marginX - this.eggR;
     const step = 12;
+    const maxDots = aiming ? 150 : 36; // faint short hint when resting
+    const t = this._tension;
+    const cr = 255, cg = Math.round(255 - t * 150), cb = Math.round(255 - t * 210); // white → hot
     let landing = null, lastHit = null;
     ctx.save();
-    ctx.fillStyle = '#ffffff';
-    for (let i = 0; i < 150; i++) {
+    for (let i = 0; i < maxDots; i++) {
       x += vx * step; y += vy * step;
       if (x < left) { x = left; vx = Math.abs(vx); }
       else if (x > right) { x = right; vx = -Math.abs(vx); }
@@ -846,21 +889,22 @@ export class GameScene {
       const hit = this._collideEgg(x, y);
       if (hit) { landing = { x, y }; lastHit = hit; break; }
       if (i % 2 === 0) {
-        ctx.globalAlpha = 0.5 * (1 - i / 150);
+        ctx.globalAlpha = (aiming ? 0.85 : 0.3) * (1 - i / maxDots);
+        ctx.fillStyle = `rgb(${cr},${cg},${cb})`;
         ctx.beginPath();
-        ctx.arc(x, y, 3, 0, Math.PI * 2);
+        ctx.arc(x, y, aiming ? 3.2 + t * 1.6 : 2.4, 0, Math.PI * 2);
         ctx.fill();
       }
     }
     ctx.restore();
-    if (landing) {
+    if (landing && aiming) {
       const cell = this._placeCell(landing.x, landing.y, lastHit);
       if (cell) {
         const w = this._cellToWorld(cell.r, cell.c);
         ctx.save();
-        ctx.globalAlpha = 0.45;
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 2;
+        ctx.globalAlpha = 0.5;
+        ctx.strokeStyle = `rgb(${cr},${cg},${cb})`;
+        ctx.lineWidth = 2.5;
         ctx.beginPath();
         ctx.arc(w.x, w.y, this.eggR, 0, Math.PI * 2);
         ctx.stroke();
@@ -869,44 +913,99 @@ export class GameScene {
     }
   }
 
-  _drawCannon(ctx) {
-    const c = this.cannon;
-    const ry = (this._recoil || 0) * 0.5; // kick the loaded egg downward briefly
+  _drawSlingshot(ctx) {
+    const a = this.anchor;
+    const ry = (this._recoil || 0) * 0.4;
+    const bx = a.x + this.pull.x;
+    const by = a.y + this.pull.y + ry;     // ball / pouch position
+    const tipY = a.y - 2;
+    const Lx = a.x - 38, Rx = a.x + 38;     // fork tips
+    const baseY = 650, splitY = a.y + 30;
+
+    // --- wooden Y frame ---
     ctx.save();
-    ctx.fillStyle = 'rgba(0,0,0,0.4)';
-    this._roundRect(ctx, c.x - 44, c.y + 6 + ry, 88, 34, 12);
-    ctx.fill();
-    ctx.strokeStyle = this.theme.wallEdge || 'rgba(255,255,255,0.4)';
-    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(40,24,12,0.9)';
+    ctx.lineWidth = 14;
+    ctx.beginPath();
+    ctx.moveTo(a.x, baseY); ctx.lineTo(a.x, splitY);
+    ctx.moveTo(a.x, splitY); ctx.lineTo(Lx, tipY);
+    ctx.moveTo(a.x, splitY); ctx.lineTo(Rx, tipY);
     ctx.stroke();
+    const wood = ctx.createLinearGradient(a.x - 40, 0, a.x + 40, 0);
+    wood.addColorStop(0, '#7a4a22'); wood.addColorStop(0.5, '#b07636'); wood.addColorStop(1, '#7a4a22');
+    ctx.strokeStyle = wood;
+    ctx.lineWidth = 10;
+    ctx.beginPath();
+    ctx.moveTo(a.x, baseY); ctx.lineTo(a.x, splitY);
+    ctx.moveTo(a.x, splitY); ctx.lineTo(Lx, tipY);
+    ctx.moveTo(a.x, splitY); ctx.lineTo(Rx, tipY);
+    ctx.stroke();
+    ctx.fillStyle = '#5a3414';
+    for (const tx of [Lx, Rx]) { ctx.beginPath(); ctx.arc(tx, tipY, 6, 0, Math.PI * 2); ctx.fill(); }
     ctx.restore();
+
     if (this.current && !this.gameOver) {
-      const ey = c.y + ry;
-      // auto-fire countdown ring — depletes clockwise, pulses red when urgent
-      const t = Math.min(1, this._idle / this._autoFireSec());
-      if (t > 0.22 && !this.projectile) {
-        const remain = 1 - t;
+      const t = this._tension;
+      const bandW = 5 + t * 3;
+      const bandCol = `rgb(235,${Math.round(180 - t * 140)},${Math.round(120 - t * 90)})`; // amber → hot red
+
+      // back bands (behind the ball)
+      ctx.save();
+      ctx.lineCap = 'round';
+      if (t > 0.6) { ctx.shadowColor = 'rgba(255,80,60,0.7)'; ctx.shadowBlur = 10; }
+      ctx.strokeStyle = bandCol;
+      ctx.lineWidth = bandW;
+      ctx.beginPath();
+      ctx.moveTo(Lx, tipY); ctx.lineTo(bx, by);
+      ctx.moveTo(Rx, tipY); ctx.lineTo(bx, by);
+      ctx.stroke();
+      ctx.restore();
+
+      // leather pouch behind the ball
+      ctx.save();
+      ctx.fillStyle = 'rgba(30,18,10,0.92)';
+      ctx.beginPath();
+      ctx.ellipse(bx, by, this.eggR * 0.95, this.eggR * 1.05, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      // auto-fire countdown ring (only while resting & idle)
+      const ct = Math.min(1, this._idle / this._autoFireSec());
+      if (ct > 0.22 && !this.projectile && !this._aiming) {
         ctx.save();
-        ctx.translate(c.x, ey);
-        ctx.lineWidth = 3.5;
-        ctx.lineCap = 'round';
-        ctx.strokeStyle = t > 0.7
+        ctx.translate(bx, by);
+        ctx.lineWidth = 3.5; ctx.lineCap = 'round';
+        ctx.strokeStyle = ct > 0.7
           ? `rgba(255,86,96,${0.55 + 0.45 * Math.abs(Math.sin(performance.now() / 110))})`
           : 'rgba(255,255,255,0.72)';
         ctx.beginPath();
-        ctx.arc(0, 0, this.eggR + 8, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * remain);
+        ctx.arc(0, 0, this.eggR + 8, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (1 - ct));
         ctx.stroke();
         ctx.restore();
       }
-      this._drawEgg(ctx, c.x, ey, this.curRainbow ? -1 : this.current.color, this.current.seed);
+
+      // loaded egg
+      this._drawEgg(ctx, bx, by, this.curRainbow ? -1 : this.current.color, this.current.seed);
       if (this.curBomb) {
         ctx.save();
         ctx.font = '20px system-ui, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('💣', c.x, ey + 1);
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('💣', bx, by + 1);
         ctx.restore();
       }
+
+      // front strands wrapping over the ball edges (depth)
+      ctx.save();
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = `rgba(255,${Math.round(210 - t * 120)},${Math.round(160 - t * 110)},0.85)`;
+      ctx.lineWidth = Math.max(2, bandW - 3);
+      ctx.beginPath();
+      ctx.moveTo(Lx, tipY); ctx.lineTo(bx - this.eggR * 0.5, by);
+      ctx.moveTo(Rx, tipY); ctx.lineTo(bx + this.eggR * 0.5, by);
+      ctx.stroke();
+      ctx.restore();
     }
   }
 

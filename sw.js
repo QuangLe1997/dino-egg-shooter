@@ -6,7 +6,7 @@
    - images → cache-first (immutable-ish, fast, offline).
    - cross-origin (CDN) → cache-first with opaque fallback.
    Bump VERSION on each release to purge old caches. */
-const VERSION = 'v2';
+const VERSION = 'v3';
 const CACHE = `dino-${VERSION}`;
 
 const CORE = [
