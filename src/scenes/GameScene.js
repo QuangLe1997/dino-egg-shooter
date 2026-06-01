@@ -226,6 +226,8 @@ export class GameScene {
       if (this.paused || this.gameOver || this.projectile) return;
       AudioManager.resume();
       e.preventDefault();
+      // capture the pointer so the drag keeps tracking even over the booster bar
+      if (e.pointerId != null && canvas.setPointerCapture) { try { canvas.setPointerCapture(e.pointerId); } catch {} }
       this._aiming = true;
       this._idle = 0;
       this._updatePull(toPlay(e));
@@ -256,7 +258,9 @@ export class GameScene {
   }
 
   // Pull the pouch toward the finger; the shot launches the OPPOSITE way (like a
-  // real slingshot). Clamp to an upward cone and a max stretch.
+  // real slingshot). The draw has RISING RESISTANCE — the band stretches quickly
+  // at first, then much more slowly near full draw (force grows with stretch), so
+  // the last bit of power takes a big extra finger pull. Clamped to an upward cone.
   _updatePull(p) {
     let dx = p.x - this.anchor.x;
     let dy = p.y - this.anchor.y;
@@ -264,7 +268,12 @@ export class GameScene {
     let ang = Math.atan2(dy, dx);                  // pull angle, downward ∈ (0, π)
     const minAng = 0.34, maxAng = Math.PI - 0.34;  // keep the launch off the side walls
     ang = Math.max(minAng, Math.min(maxAng, ang));
-    const len = Math.min(this.maxPull, Math.hypot(dx, dy));
+    // finger may travel ~1.9× maxPull, but the ball stretch eases out (concave),
+    // so it resists more the harder you pull and % climbs much slower near the top.
+    const fingerRange = this.maxPull * 1.9;
+    const norm = Math.min(1, Math.hypot(dx, dy) / fingerRange);
+    const eased = 1 - Math.pow(1 - norm, 2.3);
+    const len = eased * this.maxPull;
     this.pull = { x: Math.cos(ang) * len, y: Math.sin(ang) * len };
     this._pullLen = len;
     this._tension = Math.max(0, Math.min(1, (len - this.minPull) / (this.maxPull - this.minPull)));
