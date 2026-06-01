@@ -56,18 +56,25 @@ export class GameScene {
     [this.optMusic, this.optSfx, this.optVibe].forEach((el) => el && el.addEventListener('change', () => this._applySettings()));
 
     // boosters
+    // power-ups: a top-left button opens a popup panel (keeps the bottom clear)
+    this.boostBtn = document.getElementById('btnBoosters');
+    this.boostPanel = document.getElementById('boosterPanel');
+    this.boostTotalEl = document.getElementById('boostTotal');
+    this.boostBtn.addEventListener('click', (e) => { e.stopPropagation(); AudioManager.playClick(); this._toggleBoostPanel(); });
+
     this.boosterBtns = [...document.querySelectorAll('.booster-btn')];
     this.boosterBtns.forEach((btn) => btn.addEventListener('click', () => this._useBooster(btn.dataset.booster)));
 
-    this.anchor = { x: PLAY_AREA.width / 2, y: 590 }; // slingshot pouch rest point
-    this.maxPull = 58;   // max ball offset from the anchor (stays above the booster bar)
-    this.minPull = 13;   // below this on release = no shot (snaps back)
+    this.anchor = { x: PLAY_AREA.width / 2, y: 592 }; // slingshot pouch rest point
+    this.maxPull = 70;   // bigger draw now the bottom bar is gone
+    this.minPull = 14;   // below this on release = no shot (snaps back)
     this._setupInput();
   }
 
   // ---------- lifecycle ----------
   enter() {
     this.hudEl.classList.remove('hidden');
+    this._closeBoostPanel();
     this._loadSettingsIntoUI();
     this._initNewGame();
     AudioManager.resume();
@@ -224,9 +231,11 @@ export class GameScene {
     };
     const down = (e) => {
       if (this.paused || this.gameOver || this.projectile) return;
+      // a tap anywhere closes the power-ups panel (instead of starting a shot)
+      if (this.boostPanel && !this.boostPanel.classList.contains('hidden')) { this._closeBoostPanel(); return; }
       AudioManager.resume();
       e.preventDefault();
-      // capture the pointer so the drag keeps tracking even over the booster bar
+      // capture the pointer so the drag keeps tracking even over other UI
       if (e.pointerId != null && canvas.setPointerCapture) { try { canvas.setPointerCapture(e.pointerId); } catch {} }
       this._aiming = true;
       this._idle = 0;
@@ -270,7 +279,7 @@ export class GameScene {
     ang = Math.max(minAng, Math.min(maxAng, ang));
     // finger may travel ~1.9× maxPull, but the ball stretch eases out (concave),
     // so it resists more the harder you pull and % climbs much slower near the top.
-    const fingerRange = this.maxPull * 1.9;
+    const fingerRange = this.maxPull * 1.6;
     const norm = Math.min(1, Math.hypot(dx, dy) / fingerRange);
     const eased = 1 - Math.pow(1 - norm, 2.3);
     const len = eased * this.maxPull;
@@ -640,6 +649,7 @@ export class GameScene {
     }
     this._refreshBoosterUI();
     EconomyManager.setBoosters(this.boosters);
+    this._closeBoostPanel();
   }
 
   _removeLowestRow() {
@@ -749,6 +759,22 @@ export class GameScene {
     this.hammerEl.textContent = this.boosters.hammer || 0;
     this.bombEl.textContent = this.boosters.bomb || 0;
     this.freezeEl.textContent = this.boosters.freeze || 0;
+    const total = (this.boosters.hammer || 0) + (this.boosters.bomb || 0) + (this.boosters.freeze || 0);
+    if (this.boostTotalEl) {
+      this.boostTotalEl.textContent = total;
+      this.boostTotalEl.classList.toggle('hidden', total <= 0);
+    }
+  }
+
+  _toggleBoostPanel() {
+    const open = !this.boostPanel.classList.toggle('hidden');
+    this.boostBtn.classList.toggle('open', open);
+  }
+
+  _closeBoostPanel() {
+    if (!this.boostPanel) return;
+    this.boostPanel.classList.add('hidden');
+    this.boostBtn.classList.remove('open');
   }
 
   // ---------- pause / game over ----------
@@ -972,7 +998,7 @@ export class GameScene {
     const by = a.y + this.pull.y + ry;     // ball / pouch position
     const tipY = a.y - 2;
     const Lx = a.x - 38, Rx = a.x + 38;     // fork tips
-    const baseY = 650, splitY = a.y + 30;
+    const baseY = 686, splitY = a.y + 30;
 
     // --- wooden Y frame ---
     ctx.save();

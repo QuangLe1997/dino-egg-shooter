@@ -90,6 +90,15 @@
     <div id="hud" class="hidden">
       <div class="hud-top">
         <div class="hud-left">
+          <button id="btnBoosters" class="hud-boost-btn" aria-label="Power-ups">
+            🎒<span class="hud-boost-badge hidden" id="boostTotal">0</span>
+          </button>
+          <div class="hud-coins" id="hudWallet">
+            <img class="hud-coin-ic" src="assets/images/coin.png" alt="coins" /><span id="hudWalletCount">0</span>
+          </div>
+        </div>
+
+        <div class="hud-center">
           <div class="hud-eyebrow">SCORE</div>
           <div class="hud-score-num" id="hudScore">0</div>
           <div class="hud-levelline">
@@ -100,9 +109,6 @@
         </div>
 
         <div class="hud-right">
-          <div class="hud-coins" id="hudWallet">
-            <img class="hud-coin-ic" src="assets/images/coin.png" alt="coins" /><span id="hudWalletCount">0</span>
-          </div>
           <div class="hud-next">
             <span class="hud-eyebrow">NEXT</span>
             <span id="hudNext" class="hud-next-circle"></span>
@@ -111,15 +117,17 @@
         </div>
       </div>
 
-      <div class="hud-boosters">
+      <!-- power-ups popup (opens from the top-left button) -->
+      <div id="boosterPanel" class="booster-panel hidden">
+        <div class="booster-panel-title">POWER-UPS</div>
         <button class="booster-btn" data-booster="hammer" title="Rainbow egg — matches any colour">
-          🌈<span class="booster-count" id="boostHammer">3</span>
+          <span class="bb-ic">🌈</span><span class="bb-label">Rainbow egg</span><span class="booster-count" id="boostHammer">3</span>
         </button>
         <button class="booster-btn" data-booster="bomb" title="Bomb egg — explodes on impact">
-          💣<span class="booster-count" id="boostBomb">1</span>
+          <span class="bb-ic">💣</span><span class="bb-label">Bomb egg</span><span class="booster-count" id="boostBomb">1</span>
         </button>
         <button class="booster-btn" data-booster="freeze" title="Push back — clear the lowest row">
-          ⬆️<span class="booster-count" id="boostFreeze">2</span>
+          <span class="bb-ic">⬆️</span><span class="bb-label">Push back</span><span class="booster-count" id="boostFreeze">2</span>
         </button>
       </div>
 
