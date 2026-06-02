@@ -62,6 +62,8 @@ export class GameScene {
     this.boostBtn = document.getElementById('btnBoosters');
     this.boostPanel = document.getElementById('boosterPanel');
     this.boostTotalEl = document.getElementById('boostTotal');
+    this.descendBarEl = document.getElementById('descendBar');
+    this.descendFillEl = document.getElementById('descendFill');
     this.boostBtn.addEventListener('click', (e) => { e.stopPropagation(); AudioManager.playClick(); this._toggleBoostPanel(); });
 
     this.boosterBtns = [...document.querySelectorAll('.booster-btn')];
@@ -147,6 +149,8 @@ export class GameScene {
     this.current = this._newEgg();
     this.next = this._newEgg();
     this.shotsLeft = this._rowEvery();
+    this._descendMax = this._descendInterval();   // row-drop clock (shrinks per level)
+    this._descendTimer = this._descendMax;
 
     // coins / wallet
     this.runCoins = 0;
@@ -208,6 +212,19 @@ export class GameScene {
   }
 
   _rowEvery() { return Math.max(3, this.diff.rowEveryShots - Math.floor((this.level - 1) / 2)); }
+
+  // seconds on the row-drop clock — shorter at higher levels = more rushed
+  _descendInterval() {
+    const d = this.diff;
+    return Math.max(d.descendFloor ?? 5, (d.descendBase ?? 14) - (this.level - 1) * (d.descendStep ?? 1));
+  }
+
+  _updateDescendUI() {
+    if (!this.descendFillEl) return;
+    const frac = Math.max(0, Math.min(1, this._descendTimer / (this._descendMax || 1)));
+    this.descendFillEl.style.width = (frac * 100) + '%';
+    if (this.descendBarEl) this.descendBarEl.classList.toggle('urgent', frac < 0.3);
+  }
 
   _fillWave(rows) {
     for (let r = 0; r < rows; r++) {
@@ -550,7 +567,7 @@ export class GameScene {
       this.combo = 0;
     }
     this.shotsLeft--;
-    if (this.shotsLeft <= 0) { this._addRow(); this.shotsLeft = this._rowEvery(); }
+    if (this.shotsLeft <= 0) this._addRow();
     if (this.grid.size === 0) this._boardCleared();
     this._checkLevelUp();
     this._updateHUD();
@@ -569,8 +586,13 @@ export class GameScene {
       if (Math.random() < 0.85) ng.set(this._key(0, c), { r: 0, c, color: (Math.random() * this.colorsInPlay) | 0, seed: this._seed() });
     }
     this.grid = ng;
+    this.shotsLeft = this._rowEvery();            // any row-add resets BOTH feeds
+    this._descendMax = this._descendInterval();
+    this._descendTimer = this._descendMax;
     this.shake.trigger(5, 0.2);
+    this.particles.flash(PLAY_AREA.width / 2, this.originY, 180, 'rgba(255,120,120,0.4)');
     AudioManager.playDrop();
+    this._checkDeath();
   }
 
   _boardCleared() {
@@ -583,6 +605,8 @@ export class GameScene {
     this._flyCoins(Math.round(40 * this.diff.coinReward), PLAY_AREA.width / 2, PLAY_AREA.height * 0.4);
     this._fillWave(this.diff.startRows);
     this.shotsLeft = this._rowEvery();
+    this._descendMax = this._descendInterval();
+    this._descendTimer = this._descendMax;
   }
 
   _checkDeath() {
@@ -843,6 +867,10 @@ export class GameScene {
         this._fire();
       }
     }
+    // row-drop clock — ticks even while you aim; forces a row at 0 (urgency)
+    this._descendTimer -= dt;
+    this._updateDescendUI();
+    if (this._descendTimer <= 0) this._addRow();
     if (this._recoil > 0) this._recoil = Math.max(0, this._recoil - dt * 60);
     if (this._wallFlash) { this._wallFlash.t -= dt * 3; if (this._wallFlash.t <= 0) this._wallFlash = null; }
     this.particles.update(dt);

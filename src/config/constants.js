@@ -14,6 +14,7 @@ export const DIFFICULTY = {
     label: 'Easy',
     startRows: 4,        // rows pre-filled at the top
     rowEveryShots: 9,    // a new row descends every N shots
+    descendBase: 18, descendStep: 1.0, descendFloor: 7, // seconds on the row-drop clock (shrinks per level)
     colors: 4,           // number of egg colours in play
     dangerY: 552,        // lose if an egg centre passes this y (above the slingshot)
     coinReward: 0.7,
@@ -23,6 +24,7 @@ export const DIFFICULTY = {
     label: 'Normal',
     startRows: 5,
     rowEveryShots: 7,
+    descendBase: 14, descendStep: 1.1, descendFloor: 5,
     colors: 5,
     dangerY: 536,
     coinReward: 1.0,
@@ -32,6 +34,7 @@ export const DIFFICULTY = {
     label: 'Hard',
     startRows: 6,
     rowEveryShots: 5,
+    descendBase: 11, descendStep: 1.2, descendFloor: 4,
     colors: 6,
     dangerY: 520,
     coinReward: 1.4,

@@ -478,6 +478,27 @@ html, body {
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
+/* row-drop countdown — the clock that makes later levels rushed */
+.descend-bar {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 5px;
+  background: rgba(255,255,255,0.08);
+  overflow: hidden;
+  z-index: 6;
+}
+#descendFill {
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, #6be37a, #ffd23f);
+  transition: width 0.12s linear, background 0.3s ease;
+}
+.descend-bar.urgent #descendFill {
+  background: linear-gradient(90deg, #ff7a45, #ff4d5e);
+  animation: descend-pulse 0.5s ease-in-out infinite;
+}
+@keyframes descend-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+
 /* Sleek header — no boxy cards. Glowing type + hairline accents over a soft
    top veil (a graceful fade, not a panel). */
 .hud-top {
